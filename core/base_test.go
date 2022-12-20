@@ -11,7 +11,11 @@ func TestNewBaseApp(t *testing.T) {
 	const testDataDir = "./pb_base_app_test_data_dir/"
 	defer os.RemoveAll(testDataDir)
 
-	app := NewBaseApp(testDataDir, "test_env", true)
+	app := NewBaseApp(&BaseAppConfig{
+		DataDir:       testDataDir,
+		EncryptionEnv: "test_env",
+		IsDebug:       true,
+	})
 
 	if app.dataDir != testDataDir {
 		t.Fatalf("expected dataDir %q, got %q", testDataDir, app.dataDir)
@@ -42,12 +46,24 @@ func TestBaseAppBootstrap(t *testing.T) {
 	const testDataDir = "./pb_base_app_test_data_dir/"
 	defer os.RemoveAll(testDataDir)
 
-	app := NewBaseApp(testDataDir, "pb_test_env", false)
+	app := NewBaseApp(&BaseAppConfig{
+		DataDir:       testDataDir,
+		EncryptionEnv: "pb_test_env",
+		IsDebug:       false,
+	})
 	defer app.ResetBootstrapState()
+
+	if app.IsBootstrapped() {
+		t.Fatal("Didn't expect the application to be bootstrapped.")
+	}
 
 	// bootstrap
 	if err := app.Bootstrap(); err != nil {
 		t.Fatal(err)
+	}
+
+	if !app.IsBootstrapped() {
+		t.Fatal("Expected the application to be bootstrapped.")
 	}
 
 	if stat, err := os.Stat(testDataDir); err != nil || !stat.IsDir() {
@@ -112,27 +128,31 @@ func TestBaseAppGetters(t *testing.T) {
 	const testDataDir = "./pb_base_app_test_data_dir/"
 	defer os.RemoveAll(testDataDir)
 
-	app := NewBaseApp(testDataDir, "pb_test_env", false)
+	app := NewBaseApp(&BaseAppConfig{
+		DataDir:       testDataDir,
+		EncryptionEnv: "pb_test_env",
+		IsDebug:       false,
+	})
 	defer app.ResetBootstrapState()
 
 	if err := app.Bootstrap(); err != nil {
 		t.Fatal(err)
 	}
 
-	if app.db != app.DB() {
-		t.Fatalf("Expected app.DB %v, got %v", app.DB(), app.db)
-	}
-
 	if app.dao != app.Dao() {
 		t.Fatalf("Expected app.Dao %v, got %v", app.Dao(), app.dao)
 	}
 
-	if app.logsDB != app.LogsDB() {
-		t.Fatalf("Expected app.LogsDB %v, got %v", app.LogsDB(), app.logsDB)
+	if app.dao.ConcurrentDB() != app.DB() {
+		t.Fatalf("Expected app.DB %v, got %v", app.DB(), app.dao.ConcurrentDB())
 	}
 
 	if app.logsDao != app.LogsDao() {
 		t.Fatalf("Expected app.LogsDao %v, got %v", app.LogsDao(), app.logsDao)
+	}
+
+	if app.logsDao.ConcurrentDB() != app.LogsDB() {
+		t.Fatalf("Expected app.LogsDB %v, got %v", app.LogsDB(), app.logsDao.ConcurrentDB())
 	}
 
 	if app.dataDir != app.DataDir() {
@@ -195,28 +215,28 @@ func TestBaseAppGetters(t *testing.T) {
 		t.Fatalf("Getter app.OnMailerAfterAdminResetPasswordSend does not match or nil (%v vs %v)", app.OnMailerAfterAdminResetPasswordSend(), app.onMailerAfterAdminResetPasswordSend)
 	}
 
-	if app.onMailerBeforeUserResetPasswordSend != app.OnMailerBeforeUserResetPasswordSend() || app.OnMailerBeforeUserResetPasswordSend() == nil {
-		t.Fatalf("Getter app.OnMailerBeforeUserResetPasswordSend does not match or nil (%v vs %v)", app.OnMailerBeforeUserResetPasswordSend(), app.onMailerBeforeUserResetPasswordSend)
+	if app.onMailerBeforeRecordResetPasswordSend != app.OnMailerBeforeRecordResetPasswordSend() || app.OnMailerBeforeRecordResetPasswordSend() == nil {
+		t.Fatalf("Getter app.OnMailerBeforeRecordResetPasswordSend does not match or nil (%v vs %v)", app.OnMailerBeforeRecordResetPasswordSend(), app.onMailerBeforeRecordResetPasswordSend)
 	}
 
-	if app.onMailerAfterUserResetPasswordSend != app.OnMailerAfterUserResetPasswordSend() || app.OnMailerAfterUserResetPasswordSend() == nil {
-		t.Fatalf("Getter app.OnMailerAfterUserResetPasswordSend does not match or nil (%v vs %v)", app.OnMailerAfterUserResetPasswordSend(), app.onMailerAfterUserResetPasswordSend)
+	if app.onMailerAfterRecordResetPasswordSend != app.OnMailerAfterRecordResetPasswordSend() || app.OnMailerAfterRecordResetPasswordSend() == nil {
+		t.Fatalf("Getter app.OnMailerAfterRecordResetPasswordSend does not match or nil (%v vs %v)", app.OnMailerAfterRecordResetPasswordSend(), app.onMailerAfterRecordResetPasswordSend)
 	}
 
-	if app.onMailerBeforeUserVerificationSend != app.OnMailerBeforeUserVerificationSend() || app.OnMailerBeforeUserVerificationSend() == nil {
-		t.Fatalf("Getter app.OnMailerBeforeUserVerificationSend does not match or nil (%v vs %v)", app.OnMailerBeforeUserVerificationSend(), app.onMailerBeforeUserVerificationSend)
+	if app.onMailerBeforeRecordVerificationSend != app.OnMailerBeforeRecordVerificationSend() || app.OnMailerBeforeRecordVerificationSend() == nil {
+		t.Fatalf("Getter app.OnMailerBeforeRecordVerificationSend does not match or nil (%v vs %v)", app.OnMailerBeforeRecordVerificationSend(), app.onMailerBeforeRecordVerificationSend)
 	}
 
-	if app.onMailerAfterUserVerificationSend != app.OnMailerAfterUserVerificationSend() || app.OnMailerAfterUserVerificationSend() == nil {
-		t.Fatalf("Getter app.OnMailerAfterUserVerificationSend does not match or nil (%v vs %v)", app.OnMailerAfterUserVerificationSend(), app.onMailerAfterUserVerificationSend)
+	if app.onMailerAfterRecordVerificationSend != app.OnMailerAfterRecordVerificationSend() || app.OnMailerAfterRecordVerificationSend() == nil {
+		t.Fatalf("Getter app.OnMailerAfterRecordVerificationSend does not match or nil (%v vs %v)", app.OnMailerAfterRecordVerificationSend(), app.onMailerAfterRecordVerificationSend)
 	}
 
-	if app.onMailerBeforeUserChangeEmailSend != app.OnMailerBeforeUserChangeEmailSend() || app.OnMailerBeforeUserChangeEmailSend() == nil {
-		t.Fatalf("Getter app.OnMailerBeforeUserChangeEmailSend does not match or nil (%v vs %v)", app.OnMailerBeforeUserChangeEmailSend(), app.onMailerBeforeUserChangeEmailSend)
+	if app.onMailerBeforeRecordChangeEmailSend != app.OnMailerBeforeRecordChangeEmailSend() || app.OnMailerBeforeRecordChangeEmailSend() == nil {
+		t.Fatalf("Getter app.OnMailerBeforeRecordChangeEmailSend does not match or nil (%v vs %v)", app.OnMailerBeforeRecordChangeEmailSend(), app.onMailerBeforeRecordChangeEmailSend)
 	}
 
-	if app.onMailerAfterUserChangeEmailSend != app.OnMailerAfterUserChangeEmailSend() || app.OnMailerAfterUserChangeEmailSend() == nil {
-		t.Fatalf("Getter app.OnMailerAfterUserChangeEmailSend does not match or nil (%v vs %v)", app.OnMailerAfterUserChangeEmailSend(), app.onMailerAfterUserChangeEmailSend)
+	if app.onMailerAfterRecordChangeEmailSend != app.OnMailerAfterRecordChangeEmailSend() || app.OnMailerAfterRecordChangeEmailSend() == nil {
+		t.Fatalf("Getter app.OnMailerAfterRecordChangeEmailSend does not match or nil (%v vs %v)", app.OnMailerAfterRecordChangeEmailSend(), app.onMailerAfterRecordChangeEmailSend)
 	}
 
 	if app.onRealtimeConnectRequest != app.OnRealtimeConnectRequest() || app.OnRealtimeConnectRequest() == nil {
@@ -283,52 +303,52 @@ func TestBaseAppGetters(t *testing.T) {
 		t.Fatalf("Getter app.OnAdminAuthRequest does not match or nil (%v vs %v)", app.OnAdminAuthRequest(), app.onAdminAuthRequest)
 	}
 
-	if app.onUsersListRequest != app.OnUsersListRequest() || app.OnUsersListRequest() == nil {
-		t.Fatalf("Getter app.OnUsersListRequest does not match or nil (%v vs %v)", app.OnUsersListRequest(), app.onUsersListRequest)
+	if app.onRecordsListRequest != app.OnRecordsListRequest() || app.OnRecordsListRequest() == nil {
+		t.Fatalf("Getter app.OnRecordsListRequest does not match or nil (%v vs %v)", app.OnRecordsListRequest(), app.onRecordsListRequest)
 	}
 
-	if app.onUserViewRequest != app.OnUserViewRequest() || app.OnUserViewRequest() == nil {
-		t.Fatalf("Getter app.OnUserViewRequest does not match or nil (%v vs %v)", app.OnUserViewRequest(), app.onUserViewRequest)
+	if app.onRecordViewRequest != app.OnRecordViewRequest() || app.OnRecordViewRequest() == nil {
+		t.Fatalf("Getter app.OnRecordViewRequest does not match or nil (%v vs %v)", app.OnRecordViewRequest(), app.onRecordViewRequest)
 	}
 
-	if app.onUserBeforeCreateRequest != app.OnUserBeforeCreateRequest() || app.OnUserBeforeCreateRequest() == nil {
-		t.Fatalf("Getter app.OnUserBeforeCreateRequest does not match or nil (%v vs %v)", app.OnUserBeforeCreateRequest(), app.onUserBeforeCreateRequest)
+	if app.onRecordBeforeCreateRequest != app.OnRecordBeforeCreateRequest() || app.OnRecordBeforeCreateRequest() == nil {
+		t.Fatalf("Getter app.OnRecordBeforeCreateRequest does not match or nil (%v vs %v)", app.OnRecordBeforeCreateRequest(), app.onRecordBeforeCreateRequest)
 	}
 
-	if app.onUserAfterCreateRequest != app.OnUserAfterCreateRequest() || app.OnUserAfterCreateRequest() == nil {
-		t.Fatalf("Getter app.OnUserAfterCreateRequest does not match or nil (%v vs %v)", app.OnUserAfterCreateRequest(), app.onUserAfterCreateRequest)
+	if app.onRecordAfterCreateRequest != app.OnRecordAfterCreateRequest() || app.OnRecordAfterCreateRequest() == nil {
+		t.Fatalf("Getter app.OnRecordAfterCreateRequest does not match or nil (%v vs %v)", app.OnRecordAfterCreateRequest(), app.onRecordAfterCreateRequest)
 	}
 
-	if app.onUserBeforeUpdateRequest != app.OnUserBeforeUpdateRequest() || app.OnUserBeforeUpdateRequest() == nil {
-		t.Fatalf("Getter app.OnUserBeforeUpdateRequest does not match or nil (%v vs %v)", app.OnUserBeforeUpdateRequest(), app.onUserBeforeUpdateRequest)
+	if app.onRecordBeforeUpdateRequest != app.OnRecordBeforeUpdateRequest() || app.OnRecordBeforeUpdateRequest() == nil {
+		t.Fatalf("Getter app.OnRecordBeforeUpdateRequest does not match or nil (%v vs %v)", app.OnRecordBeforeUpdateRequest(), app.onRecordBeforeUpdateRequest)
 	}
 
-	if app.onUserAfterUpdateRequest != app.OnUserAfterUpdateRequest() || app.OnUserAfterUpdateRequest() == nil {
-		t.Fatalf("Getter app.OnUserAfterUpdateRequest does not match or nil (%v vs %v)", app.OnUserAfterUpdateRequest(), app.onUserAfterUpdateRequest)
+	if app.onRecordAfterUpdateRequest != app.OnRecordAfterUpdateRequest() || app.OnRecordAfterUpdateRequest() == nil {
+		t.Fatalf("Getter app.OnRecordAfterUpdateRequest does not match or nil (%v vs %v)", app.OnRecordAfterUpdateRequest(), app.onRecordAfterUpdateRequest)
 	}
 
-	if app.onUserBeforeDeleteRequest != app.OnUserBeforeDeleteRequest() || app.OnUserBeforeDeleteRequest() == nil {
-		t.Fatalf("Getter app.OnUserBeforeDeleteRequest does not match or nil (%v vs %v)", app.OnUserBeforeDeleteRequest(), app.onUserBeforeDeleteRequest)
+	if app.onRecordBeforeDeleteRequest != app.OnRecordBeforeDeleteRequest() || app.OnRecordBeforeDeleteRequest() == nil {
+		t.Fatalf("Getter app.OnRecordBeforeDeleteRequest does not match or nil (%v vs %v)", app.OnRecordBeforeDeleteRequest(), app.onRecordBeforeDeleteRequest)
 	}
 
-	if app.onUserAfterDeleteRequest != app.OnUserAfterDeleteRequest() || app.OnUserAfterDeleteRequest() == nil {
-		t.Fatalf("Getter app.OnUserAfterDeleteRequest does not match or nil (%v vs %v)", app.OnUserAfterDeleteRequest(), app.onUserAfterDeleteRequest)
+	if app.onRecordAfterDeleteRequest != app.OnRecordAfterDeleteRequest() || app.OnRecordAfterDeleteRequest() == nil {
+		t.Fatalf("Getter app.OnRecordAfterDeleteRequest does not match or nil (%v vs %v)", app.OnRecordAfterDeleteRequest(), app.onRecordAfterDeleteRequest)
 	}
 
-	if app.onUserAuthRequest != app.OnUserAuthRequest() || app.OnUserAuthRequest() == nil {
-		t.Fatalf("Getter app.OnUserAuthRequest does not match or nil (%v vs %v)", app.OnUserAuthRequest(), app.onUserAuthRequest)
+	if app.onRecordAuthRequest != app.OnRecordAuthRequest() || app.OnRecordAuthRequest() == nil {
+		t.Fatalf("Getter app.OnRecordAuthRequest does not match or nil (%v vs %v)", app.OnRecordAuthRequest(), app.onRecordAuthRequest)
 	}
 
-	if app.onUserListExternalAuths != app.OnUserListExternalAuths() || app.OnUserListExternalAuths() == nil {
-		t.Fatalf("Getter app.OnUserListExternalAuths does not match or nil (%v vs %v)", app.OnUserListExternalAuths(), app.onUserListExternalAuths)
+	if app.onRecordListExternalAuthsRequest != app.OnRecordListExternalAuthsRequest() || app.OnRecordListExternalAuthsRequest() == nil {
+		t.Fatalf("Getter app.OnRecordListExternalAuthsRequest does not match or nil (%v vs %v)", app.OnRecordListExternalAuthsRequest(), app.onRecordListExternalAuthsRequest)
 	}
 
-	if app.onUserBeforeUnlinkExternalAuthRequest != app.OnUserBeforeUnlinkExternalAuthRequest() || app.OnUserBeforeUnlinkExternalAuthRequest() == nil {
-		t.Fatalf("Getter app.OnUserBeforeUnlinkExternalAuthRequest does not match or nil (%v vs %v)", app.OnUserBeforeUnlinkExternalAuthRequest(), app.onUserBeforeUnlinkExternalAuthRequest)
+	if app.onRecordBeforeUnlinkExternalAuthRequest != app.OnRecordBeforeUnlinkExternalAuthRequest() || app.OnRecordBeforeUnlinkExternalAuthRequest() == nil {
+		t.Fatalf("Getter app.OnRecordBeforeUnlinkExternalAuthRequest does not match or nil (%v vs %v)", app.OnRecordBeforeUnlinkExternalAuthRequest(), app.onRecordBeforeUnlinkExternalAuthRequest)
 	}
 
-	if app.onUserAfterUnlinkExternalAuthRequest != app.OnUserAfterUnlinkExternalAuthRequest() || app.OnUserAfterUnlinkExternalAuthRequest() == nil {
-		t.Fatalf("Getter app.OnUserAfterUnlinkExternalAuthRequest does not match or nil (%v vs %v)", app.OnUserAfterUnlinkExternalAuthRequest(), app.onUserAfterUnlinkExternalAuthRequest)
+	if app.onRecordAfterUnlinkExternalAuthRequest != app.OnRecordAfterUnlinkExternalAuthRequest() || app.OnRecordAfterUnlinkExternalAuthRequest() == nil {
+		t.Fatalf("Getter app.OnRecordAfterUnlinkExternalAuthRequest does not match or nil (%v vs %v)", app.OnRecordAfterUnlinkExternalAuthRequest(), app.onRecordAfterUnlinkExternalAuthRequest)
 	}
 
 	if app.onRecordsListRequest != app.OnRecordsListRequest() || app.OnRecordsListRequest() == nil {
@@ -400,7 +420,11 @@ func TestBaseAppNewMailClient(t *testing.T) {
 	const testDataDir = "./pb_base_app_test_data_dir/"
 	defer os.RemoveAll(testDataDir)
 
-	app := NewBaseApp(testDataDir, "pb_test_env", false)
+	app := NewBaseApp(&BaseAppConfig{
+		DataDir:       testDataDir,
+		EncryptionEnv: "pb_test_env",
+		IsDebug:       false,
+	})
 
 	client1 := app.NewMailClient()
 	if val, ok := client1.(*mailer.Sendmail); !ok {
@@ -419,7 +443,11 @@ func TestBaseAppNewFilesystem(t *testing.T) {
 	const testDataDir = "./pb_base_app_test_data_dir/"
 	defer os.RemoveAll(testDataDir)
 
-	app := NewBaseApp(testDataDir, "pb_test_env", false)
+	app := NewBaseApp(&BaseAppConfig{
+		DataDir:       testDataDir,
+		EncryptionEnv: "pb_test_env",
+		IsDebug:       false,
+	})
 
 	// local
 	local, localErr := app.NewFilesystem()

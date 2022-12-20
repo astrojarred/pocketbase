@@ -1,13 +1,12 @@
 package validators
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
-	"github.com/pocketbase/pocketbase/tools/rest"
+	"github.com/pocketbase/pocketbase/tools/filesystem"
 )
 
 // UploadedFileSize checks whether the validated `rest.UploadedFile`
@@ -17,12 +16,12 @@ import (
 //	validation.Field(&form.File, validation.By(validators.UploadedFileSize(1000)))
 func UploadedFileSize(maxBytes int) validation.RuleFunc {
 	return func(value any) error {
-		v, _ := value.(*rest.UploadedFile)
+		v, _ := value.(*filesystem.File)
 		if v == nil {
 			return nil // nothing to validate
 		}
 
-		if binary.Size(v.Bytes()) > maxBytes {
+		if int(v.Size) > maxBytes {
 			return validation.NewError("validation_file_size_limit", fmt.Sprintf("Maximum allowed file size is %v bytes.", maxBytes))
 		}
 
@@ -38,7 +37,7 @@ func UploadedFileSize(maxBytes int) validation.RuleFunc {
 //	validation.Field(&form.File, validation.By(validators.UploadedFileMimeType(validMimeTypes)))
 func UploadedFileMimeType(validTypes []string) validation.RuleFunc {
 	return func(value any) error {
-		v, _ := value.(*rest.UploadedFile)
+		v, _ := value.(*filesystem.File)
 		if v == nil {
 			return nil // nothing to validate
 		}
@@ -47,7 +46,16 @@ func UploadedFileMimeType(validTypes []string) validation.RuleFunc {
 			return validation.NewError("validation_invalid_mime_type", "Unsupported file type.")
 		}
 
-		filetype := mimetype.Detect(v.Bytes())
+		f, err := v.Reader.Open()
+		if err != nil {
+			return validation.NewError("validation_invalid_mime_type", "Unsupported file type.")
+		}
+		defer f.Close()
+
+		filetype, err := mimetype.DetectReader(f)
+		if err != nil {
+			return validation.NewError("validation_invalid_mime_type", "Unsupported file type.")
+		}
 
 		for _, t := range validTypes {
 			if filetype.Is(t) {

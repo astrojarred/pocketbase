@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/mailer"
@@ -16,9 +17,17 @@ import (
 type TestApp struct {
 	*core.BaseApp
 
+	mux sync.Mutex
+
 	// EventCalls defines a map to inspect which app events
 	// (and how many times) were triggered.
+	//
+	// The following events are not counted because they execute always:
+	// - OnBeforeBootstrap
+	// - OnAfterBootstrap
+	// - OnBeforeServe
 	EventCalls map[string]int
+
 	TestMailer *TestMailer
 }
 
@@ -36,13 +45,33 @@ func (t *TestApp) Cleanup() {
 }
 
 func (t *TestApp) NewMailClient() mailer.Mailer {
+	t.mux.Lock()
+	defer t.mux.Unlock()
+
 	t.TestMailer.Reset()
+
 	return t.TestMailer
 }
 
 // ResetEventCalls resets the EventCalls counter.
 func (t *TestApp) ResetEventCalls() {
+	t.mux.Lock()
+	defer t.mux.Unlock()
+
 	t.EventCalls = make(map[string]int)
+}
+
+func (t *TestApp) registerEventCall(name string) error {
+	t.mux.Lock()
+	defer t.mux.Unlock()
+
+	if t.EventCalls == nil {
+		t.EventCalls = make(map[string]int)
+	}
+
+	t.EventCalls[name]++
+
+	return nil
 }
 
 // NewTestApp creates and initializes a test application instance.
@@ -64,7 +93,11 @@ func NewTestApp(optTestDataDir ...string) (*TestApp, error) {
 		return nil, err
 	}
 
-	app := core.NewBaseApp(tempDir, "pb_test_env", false)
+	app := core.NewBaseApp(&core.BaseAppConfig{
+		DataDir:       tempDir,
+		EncryptionEnv: "pb_test_env",
+		IsDebug:       false,
+	})
 
 	// load data dir and db connections
 	if err := app.Bootstrap(); err != nil {
@@ -81,310 +114,280 @@ func NewTestApp(optTestDataDir ...string) (*TestApp, error) {
 		TestMailer: &TestMailer{},
 	}
 
-	// no need to count since this is executed always
-	// t.OnBeforeServe().Add(func(e *core.ServeEvent) error {
-	// 	t.EventCalls["OnBeforeServe"]++
-	// 	return nil
-	// })
+	t.OnBeforeApiError().Add(func(e *core.ApiErrorEvent) error {
+		return t.registerEventCall("OnBeforeApiError")
+	})
+
+	t.OnAfterApiError().Add(func(e *core.ApiErrorEvent) error {
+		return t.registerEventCall("OnAfterApiError")
+	})
 
 	t.OnModelBeforeCreate().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelBeforeCreate"]++
-		return nil
+		return t.registerEventCall("OnModelBeforeCreate")
 	})
 
 	t.OnModelAfterCreate().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelAfterCreate"]++
-		return nil
+		return t.registerEventCall("OnModelAfterCreate")
 	})
 
 	t.OnModelBeforeUpdate().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelBeforeUpdate"]++
-		return nil
+		return t.registerEventCall("OnModelBeforeUpdate")
 	})
 
 	t.OnModelAfterUpdate().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelAfterUpdate"]++
-		return nil
+		return t.registerEventCall("OnModelAfterUpdate")
 	})
 
 	t.OnModelBeforeDelete().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelBeforeDelete"]++
-		return nil
+		return t.registerEventCall("OnModelBeforeDelete")
 	})
 
 	t.OnModelAfterDelete().Add(func(e *core.ModelEvent) error {
-		t.EventCalls["OnModelAfterDelete"]++
-		return nil
+		return t.registerEventCall("OnModelAfterDelete")
 	})
 
 	t.OnRecordsListRequest().Add(func(e *core.RecordsListEvent) error {
-		t.EventCalls["OnRecordsListRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordsListRequest")
 	})
 
 	t.OnRecordViewRequest().Add(func(e *core.RecordViewEvent) error {
-		t.EventCalls["OnRecordViewRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordViewRequest")
 	})
 
 	t.OnRecordBeforeCreateRequest().Add(func(e *core.RecordCreateEvent) error {
-		t.EventCalls["OnRecordBeforeCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordBeforeCreateRequest")
 	})
 
 	t.OnRecordAfterCreateRequest().Add(func(e *core.RecordCreateEvent) error {
-		t.EventCalls["OnRecordAfterCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordAfterCreateRequest")
 	})
 
 	t.OnRecordBeforeUpdateRequest().Add(func(e *core.RecordUpdateEvent) error {
-		t.EventCalls["OnRecordBeforeUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordBeforeUpdateRequest")
 	})
 
 	t.OnRecordAfterUpdateRequest().Add(func(e *core.RecordUpdateEvent) error {
-		t.EventCalls["OnRecordAfterUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordAfterUpdateRequest")
 	})
 
 	t.OnRecordBeforeDeleteRequest().Add(func(e *core.RecordDeleteEvent) error {
-		t.EventCalls["OnRecordBeforeDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordBeforeDeleteRequest")
 	})
 
 	t.OnRecordAfterDeleteRequest().Add(func(e *core.RecordDeleteEvent) error {
-		t.EventCalls["OnRecordAfterDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnRecordAfterDeleteRequest")
 	})
 
-	t.OnUsersListRequest().Add(func(e *core.UsersListEvent) error {
-		t.EventCalls["OnUsersListRequest"]++
-		return nil
+	t.OnRecordAuthRequest().Add(func(e *core.RecordAuthEvent) error {
+		return t.registerEventCall("OnRecordAuthRequest")
 	})
 
-	t.OnUserViewRequest().Add(func(e *core.UserViewEvent) error {
-		t.EventCalls["OnUserViewRequest"]++
-		return nil
+	t.OnRecordBeforeRequestPasswordResetRequest().Add(func(e *core.RecordRequestPasswordResetEvent) error {
+		return t.registerEventCall("OnRecordBeforeRequestPasswordResetRequest")
 	})
 
-	t.OnUserBeforeCreateRequest().Add(func(e *core.UserCreateEvent) error {
-		t.EventCalls["OnUserBeforeCreateRequest"]++
-		return nil
+	t.OnRecordAfterRequestPasswordResetRequest().Add(func(e *core.RecordRequestPasswordResetEvent) error {
+		return t.registerEventCall("OnRecordAfterRequestPasswordResetRequest")
 	})
 
-	t.OnUserAfterCreateRequest().Add(func(e *core.UserCreateEvent) error {
-		t.EventCalls["OnUserAfterCreateRequest"]++
-		return nil
+	t.OnRecordBeforeConfirmPasswordResetRequest().Add(func(e *core.RecordConfirmPasswordResetEvent) error {
+		return t.registerEventCall("OnRecordBeforeConfirmPasswordResetRequest")
 	})
 
-	t.OnUserBeforeUpdateRequest().Add(func(e *core.UserUpdateEvent) error {
-		t.EventCalls["OnUserBeforeUpdateRequest"]++
-		return nil
+	t.OnRecordAfterConfirmPasswordResetRequest().Add(func(e *core.RecordConfirmPasswordResetEvent) error {
+		return t.registerEventCall("OnRecordAfterConfirmPasswordResetRequest")
 	})
 
-	t.OnUserAfterUpdateRequest().Add(func(e *core.UserUpdateEvent) error {
-		t.EventCalls["OnUserAfterUpdateRequest"]++
-		return nil
+	t.OnRecordBeforeRequestVerificationRequest().Add(func(e *core.RecordRequestVerificationEvent) error {
+		return t.registerEventCall("OnRecordBeforeRequestVerificationRequest")
 	})
 
-	t.OnUserBeforeDeleteRequest().Add(func(e *core.UserDeleteEvent) error {
-		t.EventCalls["OnUserBeforeDeleteRequest"]++
-		return nil
+	t.OnRecordAfterRequestVerificationRequest().Add(func(e *core.RecordRequestVerificationEvent) error {
+		return t.registerEventCall("OnRecordAfterRequestVerificationRequest")
 	})
 
-	t.OnUserAfterDeleteRequest().Add(func(e *core.UserDeleteEvent) error {
-		t.EventCalls["OnUserAfterDeleteRequest"]++
-		return nil
+	t.OnRecordBeforeConfirmVerificationRequest().Add(func(e *core.RecordConfirmVerificationEvent) error {
+		return t.registerEventCall("OnRecordBeforeConfirmVerificationRequest")
 	})
 
-	t.OnUserAuthRequest().Add(func(e *core.UserAuthEvent) error {
-		t.EventCalls["OnUserAuthRequest"]++
-		return nil
+	t.OnRecordAfterConfirmVerificationRequest().Add(func(e *core.RecordConfirmVerificationEvent) error {
+		return t.registerEventCall("OnRecordAfterConfirmVerificationRequest")
 	})
 
-	t.OnUserListExternalAuths().Add(func(e *core.UserListExternalAuthsEvent) error {
-		t.EventCalls["OnUserListExternalAuths"]++
-		return nil
+	t.OnRecordBeforeRequestEmailChangeRequest().Add(func(e *core.RecordRequestEmailChangeEvent) error {
+		return t.registerEventCall("OnRecordBeforeRequestEmailChangeRequest")
 	})
 
-	t.OnUserBeforeUnlinkExternalAuthRequest().Add(func(e *core.UserUnlinkExternalAuthEvent) error {
-		t.EventCalls["OnUserBeforeUnlinkExternalAuthRequest"]++
-		return nil
+	t.OnRecordAfterRequestEmailChangeRequest().Add(func(e *core.RecordRequestEmailChangeEvent) error {
+		return t.registerEventCall("OnRecordAfterRequestEmailChangeRequest")
 	})
 
-	t.OnUserAfterUnlinkExternalAuthRequest().Add(func(e *core.UserUnlinkExternalAuthEvent) error {
-		t.EventCalls["OnUserAfterUnlinkExternalAuthRequest"]++
-		return nil
+	t.OnRecordBeforeConfirmEmailChangeRequest().Add(func(e *core.RecordConfirmEmailChangeEvent) error {
+		return t.registerEventCall("OnRecordBeforeConfirmEmailChangeRequest")
+	})
+
+	t.OnRecordAfterConfirmEmailChangeRequest().Add(func(e *core.RecordConfirmEmailChangeEvent) error {
+		return t.registerEventCall("OnRecordAfterConfirmEmailChangeRequest")
+	})
+
+	t.OnRecordListExternalAuthsRequest().Add(func(e *core.RecordListExternalAuthsEvent) error {
+		return t.registerEventCall("OnRecordListExternalAuthsRequest")
+	})
+
+	t.OnRecordBeforeUnlinkExternalAuthRequest().Add(func(e *core.RecordUnlinkExternalAuthEvent) error {
+		return t.registerEventCall("OnRecordBeforeUnlinkExternalAuthRequest")
+	})
+
+	t.OnRecordAfterUnlinkExternalAuthRequest().Add(func(e *core.RecordUnlinkExternalAuthEvent) error {
+		return t.registerEventCall("OnRecordAfterUnlinkExternalAuthRequest")
 	})
 
 	t.OnMailerBeforeAdminResetPasswordSend().Add(func(e *core.MailerAdminEvent) error {
-		t.EventCalls["OnMailerBeforeAdminResetPasswordSend"]++
-		return nil
+		return t.registerEventCall("OnMailerBeforeAdminResetPasswordSend")
 	})
 
 	t.OnMailerAfterAdminResetPasswordSend().Add(func(e *core.MailerAdminEvent) error {
-		t.EventCalls["OnMailerAfterAdminResetPasswordSend"]++
-		return nil
+		return t.registerEventCall("OnMailerAfterAdminResetPasswordSend")
 	})
 
-	t.OnMailerBeforeUserResetPasswordSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerBeforeUserResetPasswordSend"]++
-		return nil
+	t.OnMailerBeforeRecordResetPasswordSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerBeforeRecordResetPasswordSend")
 	})
 
-	t.OnMailerAfterUserResetPasswordSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerAfterUserResetPasswordSend"]++
-		return nil
+	t.OnMailerAfterRecordResetPasswordSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerAfterRecordResetPasswordSend")
 	})
 
-	t.OnMailerBeforeUserVerificationSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerBeforeUserVerificationSend"]++
-		return nil
+	t.OnMailerBeforeRecordVerificationSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerBeforeRecordVerificationSend")
 	})
 
-	t.OnMailerAfterUserVerificationSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerAfterUserVerificationSend"]++
-		return nil
+	t.OnMailerAfterRecordVerificationSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerAfterRecordVerificationSend")
 	})
 
-	t.OnMailerBeforeUserChangeEmailSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerBeforeUserChangeEmailSend"]++
-		return nil
+	t.OnMailerBeforeRecordChangeEmailSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerBeforeRecordChangeEmailSend")
 	})
 
-	t.OnMailerAfterUserChangeEmailSend().Add(func(e *core.MailerUserEvent) error {
-		t.EventCalls["OnMailerAfterUserChangeEmailSend"]++
-		return nil
+	t.OnMailerAfterRecordChangeEmailSend().Add(func(e *core.MailerRecordEvent) error {
+		return t.registerEventCall("OnMailerAfterRecordChangeEmailSend")
 	})
 
 	t.OnRealtimeConnectRequest().Add(func(e *core.RealtimeConnectEvent) error {
-		t.EventCalls["OnRealtimeConnectRequest"]++
-		return nil
+		return t.registerEventCall("OnRealtimeConnectRequest")
+	})
+
+	t.OnRealtimeDisconnectRequest().Add(func(e *core.RealtimeDisconnectEvent) error {
+		return t.registerEventCall("OnRealtimeDisconnectRequest")
+	})
+
+	t.OnRealtimeBeforeMessageSend().Add(func(e *core.RealtimeMessageEvent) error {
+		return t.registerEventCall("OnRealtimeBeforeMessageSend")
+	})
+
+	t.OnRealtimeAfterMessageSend().Add(func(e *core.RealtimeMessageEvent) error {
+		return t.registerEventCall("OnRealtimeAfterMessageSend")
 	})
 
 	t.OnRealtimeBeforeSubscribeRequest().Add(func(e *core.RealtimeSubscribeEvent) error {
-		t.EventCalls["OnRealtimeBeforeSubscribeRequest"]++
-		return nil
+		return t.registerEventCall("OnRealtimeBeforeSubscribeRequest")
 	})
 
 	t.OnRealtimeAfterSubscribeRequest().Add(func(e *core.RealtimeSubscribeEvent) error {
-		t.EventCalls["OnRealtimeAfterSubscribeRequest"]++
-		return nil
+		return t.registerEventCall("OnRealtimeAfterSubscribeRequest")
 	})
 
 	t.OnSettingsListRequest().Add(func(e *core.SettingsListEvent) error {
-		t.EventCalls["OnSettingsListRequest"]++
-		return nil
+		return t.registerEventCall("OnSettingsListRequest")
 	})
 
 	t.OnSettingsBeforeUpdateRequest().Add(func(e *core.SettingsUpdateEvent) error {
-		t.EventCalls["OnSettingsBeforeUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnSettingsBeforeUpdateRequest")
 	})
 
 	t.OnSettingsAfterUpdateRequest().Add(func(e *core.SettingsUpdateEvent) error {
-		t.EventCalls["OnSettingsAfterUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnSettingsAfterUpdateRequest")
 	})
 
 	t.OnCollectionsListRequest().Add(func(e *core.CollectionsListEvent) error {
-		t.EventCalls["OnCollectionsListRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionsListRequest")
 	})
 
 	t.OnCollectionViewRequest().Add(func(e *core.CollectionViewEvent) error {
-		t.EventCalls["OnCollectionViewRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionViewRequest")
 	})
 
 	t.OnCollectionBeforeCreateRequest().Add(func(e *core.CollectionCreateEvent) error {
-		t.EventCalls["OnCollectionBeforeCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionBeforeCreateRequest")
 	})
 
 	t.OnCollectionAfterCreateRequest().Add(func(e *core.CollectionCreateEvent) error {
-		t.EventCalls["OnCollectionAfterCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionAfterCreateRequest")
 	})
 
 	t.OnCollectionBeforeUpdateRequest().Add(func(e *core.CollectionUpdateEvent) error {
-		t.EventCalls["OnCollectionBeforeUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionBeforeUpdateRequest")
 	})
 
 	t.OnCollectionAfterUpdateRequest().Add(func(e *core.CollectionUpdateEvent) error {
-		t.EventCalls["OnCollectionAfterUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionAfterUpdateRequest")
 	})
 
 	t.OnCollectionBeforeDeleteRequest().Add(func(e *core.CollectionDeleteEvent) error {
-		t.EventCalls["OnCollectionBeforeDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionBeforeDeleteRequest")
 	})
 
 	t.OnCollectionAfterDeleteRequest().Add(func(e *core.CollectionDeleteEvent) error {
-		t.EventCalls["OnCollectionAfterDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionAfterDeleteRequest")
 	})
 
 	t.OnCollectionsBeforeImportRequest().Add(func(e *core.CollectionsImportEvent) error {
-		t.EventCalls["OnCollectionsBeforeImportRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionsBeforeImportRequest")
 	})
 
 	t.OnCollectionsAfterImportRequest().Add(func(e *core.CollectionsImportEvent) error {
-		t.EventCalls["OnCollectionsAfterImportRequest"]++
-		return nil
+		return t.registerEventCall("OnCollectionsAfterImportRequest")
 	})
 
 	t.OnAdminsListRequest().Add(func(e *core.AdminsListEvent) error {
-		t.EventCalls["OnAdminsListRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminsListRequest")
 	})
 
 	t.OnAdminViewRequest().Add(func(e *core.AdminViewEvent) error {
-		t.EventCalls["OnAdminViewRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminViewRequest")
 	})
 
 	t.OnAdminBeforeCreateRequest().Add(func(e *core.AdminCreateEvent) error {
-		t.EventCalls["OnAdminBeforeCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminBeforeCreateRequest")
 	})
 
 	t.OnAdminAfterCreateRequest().Add(func(e *core.AdminCreateEvent) error {
-		t.EventCalls["OnAdminAfterCreateRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminAfterCreateRequest")
 	})
 
 	t.OnAdminBeforeUpdateRequest().Add(func(e *core.AdminUpdateEvent) error {
-		t.EventCalls["OnAdminBeforeUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminBeforeUpdateRequest")
 	})
 
 	t.OnAdminAfterUpdateRequest().Add(func(e *core.AdminUpdateEvent) error {
-		t.EventCalls["OnAdminAfterUpdateRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminAfterUpdateRequest")
 	})
 
 	t.OnAdminBeforeDeleteRequest().Add(func(e *core.AdminDeleteEvent) error {
-		t.EventCalls["OnAdminBeforeDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminBeforeDeleteRequest")
 	})
 
 	t.OnAdminAfterDeleteRequest().Add(func(e *core.AdminDeleteEvent) error {
-		t.EventCalls["OnAdminAfterDeleteRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminAfterDeleteRequest")
 	})
 
 	t.OnAdminAuthRequest().Add(func(e *core.AdminAuthEvent) error {
-		t.EventCalls["OnAdminAuthRequest"]++
-		return nil
+		return t.registerEventCall("OnAdminAuthRequest")
 	})
 
 	t.OnFileDownloadRequest().Add(func(e *core.FileDownloadEvent) error {
-		t.EventCalls["OnFileDownloadRequest"]++
-		return nil
+		return t.registerEventCall("OnFileDownloadRequest")
 	})
 
 	return t, nil

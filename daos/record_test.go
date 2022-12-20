@@ -1,22 +1,32 @@
 package daos_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pocketbase/dbx"
+	"github.com/pocketbase/pocketbase/daos"
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/models/schema"
 	"github.com/pocketbase/pocketbase/tests"
 	"github.com/pocketbase/pocketbase/tools/list"
+	"github.com/pocketbase/pocketbase/tools/types"
 )
 
 func TestRecordQuery(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
+	collection, err := app.Dao().FindCollectionByNameOrId("demo1")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	expected := fmt.Sprintf("SELECT `%s`.* FROM `%s`", collection.Name, collection.Name)
 
@@ -30,30 +40,50 @@ func TestFindRecordById(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
-
 	scenarios := []struct {
-		id          string
-		filter      func(q *dbx.SelectQuery) error
-		expectError bool
+		collectionIdOrName string
+		id                 string
+		filter1            func(q *dbx.SelectQuery) error
+		filter2            func(q *dbx.SelectQuery) error
+		expectError        bool
 	}{
-		{"00000000-bafd-48f7-b8b7-090638afe209", nil, true},
-		{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", nil, false},
-		{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", func(q *dbx.SelectQuery) error {
+		{"demo2", "missing", nil, nil, true},
+		{"missing", "0yxhwia2amd8gec", nil, nil, true},
+		{"demo2", "0yxhwia2amd8gec", nil, nil, false},
+		{"demo2", "0yxhwia2amd8gec", func(q *dbx.SelectQuery) error {
 			q.AndWhere(dbx.HashExp{"title": "missing"})
 			return nil
-		}, true},
-		{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", func(q *dbx.SelectQuery) error {
+		}, nil, true},
+		{"demo2", "0yxhwia2amd8gec", func(q *dbx.SelectQuery) error {
 			return errors.New("test error")
+		}, nil, true},
+		{"demo2", "0yxhwia2amd8gec", func(q *dbx.SelectQuery) error {
+			q.AndWhere(dbx.HashExp{"title": "test3"})
+			return nil
+		}, nil, false},
+		{"demo2", "0yxhwia2amd8gec", func(q *dbx.SelectQuery) error {
+			q.AndWhere(dbx.HashExp{"title": "test3"})
+			return nil
+		}, func(q *dbx.SelectQuery) error {
+			q.AndWhere(dbx.HashExp{"active": false})
+			return nil
 		}, true},
-		{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", func(q *dbx.SelectQuery) error {
-			q.AndWhere(dbx.HashExp{"title": "lorem"})
+		{"sz5l5z67tg7gku0", "0yxhwia2amd8gec", func(q *dbx.SelectQuery) error {
+			q.AndWhere(dbx.HashExp{"title": "test3"})
+			return nil
+		}, func(q *dbx.SelectQuery) error {
+			q.AndWhere(dbx.HashExp{"active": true})
 			return nil
 		}, false},
 	}
 
 	for i, scenario := range scenarios {
-		record, err := app.Dao().FindRecordById(collection, scenario.id, scenario.filter)
+		record, err := app.Dao().FindRecordById(
+			scenario.collectionIdOrName,
+			scenario.id,
+			scenario.filter1,
+			scenario.filter2,
+		)
 
 		hasErr := err != nil
 		if hasErr != scenario.expectError {
@@ -70,25 +100,34 @@ func TestFindRecordsByIds(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
-
 	scenarios := []struct {
-		ids         []string
-		filter      func(q *dbx.SelectQuery) error
-		expectTotal int
-		expectError bool
+		collectionIdOrName string
+		ids                []string
+		filter1            func(q *dbx.SelectQuery) error
+		filter2            func(q *dbx.SelectQuery) error
+		expectTotal        int
+		expectError        bool
 	}{
-		{[]string{}, nil, 0, false},
-		{[]string{"00000000-bafd-48f7-b8b7-090638afe209"}, nil, 0, false},
-		{[]string{"b5c2ffc2-bafd-48f7-b8b7-090638afe209"}, nil, 1, false},
+		{"demo2", []string{}, nil, nil, 0, false},
+		{"demo2", []string{""}, nil, nil, 0, false},
+		{"demo2", []string{"missing"}, nil, nil, 0, false},
+		{"missing", []string{"0yxhwia2amd8gec"}, nil, nil, 0, true},
+		{"demo2", []string{"0yxhwia2amd8gec"}, nil, nil, 1, false},
+		{"sz5l5z67tg7gku0", []string{"0yxhwia2amd8gec"}, nil, nil, 1, false},
 		{
-			[]string{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", "848a1dea-5ddd-42d6-a00d-030547bffcfe"},
+			"demo2",
+			[]string{"0yxhwia2amd8gec", "llvuca81nly1qls"},
+			nil,
 			nil,
 			2,
 			false,
 		},
 		{
-			[]string{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", "848a1dea-5ddd-42d6-a00d-030547bffcfe"},
+			"demo2",
+			[]string{"0yxhwia2amd8gec", "llvuca81nly1qls"},
+			func(q *dbx.SelectQuery) error {
+				return nil // empty filter
+			},
 			func(q *dbx.SelectQuery) error {
 				return errors.New("test error")
 			},
@@ -96,9 +135,25 @@ func TestFindRecordsByIds(t *testing.T) {
 			true,
 		},
 		{
-			[]string{"b5c2ffc2-bafd-48f7-b8b7-090638afe209", "848a1dea-5ddd-42d6-a00d-030547bffcfe"},
+			"demo2",
+			[]string{"0yxhwia2amd8gec", "llvuca81nly1qls"},
 			func(q *dbx.SelectQuery) error {
-				q.AndWhere(dbx.Like("title", "test").Match(true, true))
+				q.AndWhere(dbx.HashExp{"active": true})
+				return nil
+			},
+			nil,
+			1,
+			false,
+		},
+		{
+			"sz5l5z67tg7gku0",
+			[]string{"0yxhwia2amd8gec", "llvuca81nly1qls"},
+			func(q *dbx.SelectQuery) error {
+				q.AndWhere(dbx.HashExp{"active": true})
+				return nil
+			},
+			func(q *dbx.SelectQuery) error {
+				q.AndWhere(dbx.Not(dbx.HashExp{"title": ""}))
 				return nil
 			},
 			1,
@@ -107,7 +162,12 @@ func TestFindRecordsByIds(t *testing.T) {
 	}
 
 	for i, scenario := range scenarios {
-		records, err := app.Dao().FindRecordsByIds(collection, scenario.ids, scenario.filter)
+		records, err := app.Dao().FindRecordsByIds(
+			scenario.collectionIdOrName,
+			scenario.ids,
+			scenario.filter1,
+			scenario.filter2,
+		)
 
 		hasErr := err != nil
 		if hasErr != scenario.expectError {
@@ -131,35 +191,53 @@ func TestFindRecordsByExpr(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
-
 	scenarios := []struct {
-		expression  dbx.Expression
-		expectIds   []string
-		expectError bool
+		collectionIdOrName string
+		expressions        []dbx.Expression
+		expectIds          []string
+		expectError        bool
 	}{
 		{
+			"missing",
 			nil,
 			[]string{},
 			true,
 		},
 		{
-			dbx.HashExp{"id": 123},
+			"demo2",
+			nil,
+			[]string{
+				"achvryl401bhse3",
+				"llvuca81nly1qls",
+				"0yxhwia2amd8gec",
+			},
+			false,
+		},
+		{
+			"demo2",
+			[]dbx.Expression{
+				nil,
+				dbx.HashExp{"id": "123"},
+			},
 			[]string{},
 			false,
 		},
 		{
-			dbx.Like("title", "test").Match(true, true),
+			"sz5l5z67tg7gku0",
+			[]dbx.Expression{
+				dbx.Like("title", "test").Match(true, true),
+				dbx.HashExp{"active": true},
+			},
 			[]string{
-				"848a1dea-5ddd-42d6-a00d-030547bffcfe",
-				"577bd676-aacb-4072-b7da-99d00ee210a4",
+				"achvryl401bhse3",
+				"0yxhwia2amd8gec",
 			},
 			false,
 		},
 	}
 
 	for i, scenario := range scenarios {
-		records, err := app.Dao().FindRecordsByExpr(collection, scenario.expression)
+		records, err := app.Dao().FindRecordsByExpr(scenario.collectionIdOrName, scenario.expressions...)
 
 		hasErr := err != nil
 		if hasErr != scenario.expectError {
@@ -183,42 +261,52 @@ func TestFindFirstRecordByData(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
-
 	scenarios := []struct {
-		key         string
-		value       any
-		expectId    string
-		expectError bool
+		collectionIdOrName string
+		key                string
+		value              any
+		expectId           string
+		expectError        bool
 	}{
 		{
+			"missing",
+			"id",
+			"llvuca81nly1qls",
+			"llvuca81nly1qls",
+			true,
+		},
+		{
+			"demo2",
 			"",
-			"848a1dea-5ddd-42d6-a00d-030547bffcfe",
+			"llvuca81nly1qls",
 			"",
 			true,
 		},
 		{
+			"demo2",
 			"id",
 			"invalid",
 			"",
 			true,
 		},
 		{
+			"demo2",
 			"id",
-			"848a1dea-5ddd-42d6-a00d-030547bffcfe",
-			"848a1dea-5ddd-42d6-a00d-030547bffcfe",
+			"llvuca81nly1qls",
+			"llvuca81nly1qls",
 			false,
 		},
 		{
+			"sz5l5z67tg7gku0",
 			"title",
-			"lorem",
-			"b5c2ffc2-bafd-48f7-b8b7-090638afe209",
+			"test3",
+			"0yxhwia2amd8gec",
 			false,
 		},
 	}
 
 	for i, scenario := range scenarios {
-		record, err := app.Dao().FindFirstRecordByData(collection, scenario.key, scenario.value)
+		record, err := app.Dao().FindFirstRecordByData(scenario.collectionIdOrName, scenario.key, scenario.value)
 
 		hasErr := err != nil
 		if hasErr != scenario.expectError {
@@ -236,32 +324,44 @@ func TestIsRecordValueUnique(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo4")
-
-	testManyRelsId1 := "df55c8ff-45ef-4c82-8aed-6e2183fe1125"
-	testManyRelsId2 := "b84cd893-7119-43c9-8505-3c4e22da28a9"
+	testManyRelsId1 := "bgs820n361vj1qd"
+	testManyRelsId2 := "4q1xlclmfloku33"
+	testManyRelsId3 := "oap640cot4yru2s"
 
 	scenarios := []struct {
-		key       string
-		value     any
-		excludeId string
-		expected  bool
+		collectionIdOrName string
+		key                string
+		value              any
+		excludeIds         []string
+		expected           bool
 	}{
-		{"", "", "", false},
-		{"missing", "unique", "", false},
-		{"title", "unique", "", true},
-		{"title", "demo1", "", false},
-		{"title", "demo1", "054f9f24-0a0a-4e09-87b1-bc7ff2b336a2", true},
-		{"manyrels", []string{testManyRelsId2}, "", false},
-		{"manyrels", []any{testManyRelsId2}, "", false},
-		// with exclude
-		{"manyrels", []string{testManyRelsId1, testManyRelsId2}, "b8ba58f9-e2d7-42a0-b0e7-a11efd98236b", true},
-		// reverse order
-		{"manyrels", []string{testManyRelsId2, testManyRelsId1}, "", true},
+		{"demo2", "", "", nil, false},
+		{"demo2", "", "", []string{""}, false},
+		{"demo2", "missing", "unique", nil, false},
+		{"demo2", "title", "unique", nil, true},
+		{"demo2", "title", "unique", []string{}, true},
+		{"demo2", "title", "unique", []string{""}, true},
+		{"demo2", "title", "test1", []string{""}, false},
+		{"demo2", "title", "test1", []string{"llvuca81nly1qls"}, true},
+		{"demo1", "rel_many", []string{testManyRelsId3}, nil, false},
+		{"wsmn24bux7wo113", "rel_many", []any{testManyRelsId3}, []string{""}, false},
+		{"wsmn24bux7wo113", "rel_many", []any{testManyRelsId3}, []string{"84nmscqy84lsi1t"}, true},
+		// mixed json array order
+		{"demo1", "rel_many", []string{testManyRelsId1, testManyRelsId3, testManyRelsId2}, nil, true},
+		// username special case-insensitive match
+		{"users", "username", "test2_username", nil, false},
+		{"users", "username", "TEST2_USERNAME", nil, false},
+		{"users", "username", "new_username", nil, true},
+		{"users", "username", "TEST2_USERNAME", []string{"oap640cot4yru2s"}, true},
 	}
 
 	for i, scenario := range scenarios {
-		result := app.Dao().IsRecordValueUnique(collection, scenario.key, scenario.value, scenario.excludeId)
+		result := app.Dao().IsRecordValueUnique(
+			scenario.collectionIdOrName,
+			scenario.key,
+			scenario.value,
+			scenario.excludeIds...,
+		)
 
 		if result != scenario.expected {
 			t.Errorf("(%d) Expected %v, got %v", i, scenario.expected, result)
@@ -269,43 +369,164 @@ func TestIsRecordValueUnique(t *testing.T) {
 	}
 }
 
-func TestFindUserRelatedRecords(t *testing.T) {
+func TestFindAuthRecordByToken(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	u0 := &models.User{}
-	u1, _ := app.Dao().FindUserByEmail("test3@example.com")
-	u2, _ := app.Dao().FindUserByEmail("test2@example.com")
-
 	scenarios := []struct {
-		user        *models.User
-		expectedIds []string
+		token         string
+		baseKey       string
+		expectedEmail string
+		expectError   bool
 	}{
-		{u0, []string{}},
-		{u1, []string{
-			"94568ca2-0bee-49d7-b749-06cb97956fd9", // demo2
-			"fc69274d-ca5c-416a-b9ef-561b101cfbb1", // profile
-		}},
-		{u2, []string{
-			"b2d5e39d-f569-4cc1-b593-3f074ad026bf", // profile
-		}},
+		// invalid auth token
+		{
+			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoUmVjb3JkIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyMjA4OTg1MjYxfQ.H2KKcIXiAfxvuXMFzizo1SgsinDP4hcWhD3pYoP4Nqw",
+			app.Settings().RecordAuthToken.Secret,
+			"",
+			true,
+		},
+		// expired token
+		{
+			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoUmVjb3JkIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoxNjQwOTkxNjYxfQ.HqvpCpM0RAk3Qu9PfCMuZsk_DKh9UYuzFLwXBMTZd1w",
+			app.Settings().RecordAuthToken.Secret,
+			"",
+			true,
+		},
+		// wrong base key (password reset token secret instead of auth secret)
+		{
+			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoUmVjb3JkIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyMjA4OTg1MjYxfQ.UwD8JvkbQtXpymT09d7J6fdA0aP9g4FJ1GPh_ggEkzc",
+			app.Settings().RecordPasswordResetToken.Secret,
+			"",
+			true,
+		},
+		// valid token and base key but with deleted/missing collection
+		{
+			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoUmVjb3JkIiwiY29sbGVjdGlvbklkIjoibWlzc2luZyIsImV4cCI6MjIwODk4NTI2MX0.0oEHQpdpHp0Nb3VN8La0ssg-SjwWKiRl_k1mUGxdKlU",
+			app.Settings().RecordAuthToken.Secret,
+			"test@example.com",
+			true,
+		},
+		// valid token
+		{
+			"eyJhbGciOiJIUzI1NiJ9.eyJpZCI6IjRxMXhsY2xtZmxva3UzMyIsInR5cGUiOiJhdXRoUmVjb3JkIiwiY29sbGVjdGlvbklkIjoiX3BiX3VzZXJzX2F1dGhfIiwiZXhwIjoyMjA4OTg1MjYxfQ.UwD8JvkbQtXpymT09d7J6fdA0aP9g4FJ1GPh_ggEkzc",
+			app.Settings().RecordAuthToken.Secret,
+			"test@example.com",
+			false,
+		},
 	}
 
 	for i, scenario := range scenarios {
-		records, err := app.Dao().FindUserRelatedRecords(scenario.user)
-		if err != nil {
-			t.Fatal(err)
-		}
+		record, err := app.Dao().FindAuthRecordByToken(scenario.token, scenario.baseKey)
 
-		if len(records) != len(scenario.expectedIds) {
-			t.Errorf("(%d) Expected %d records, got %d (%v)", i, len(scenario.expectedIds), len(records), records)
+		hasErr := err != nil
+		if hasErr != scenario.expectError {
+			t.Errorf("(%d) Expected hasErr to be %v, got %v (%v)", i, scenario.expectError, hasErr, err)
 			continue
 		}
 
-		for _, r := range records {
-			if !list.ExistInSlice(r.Id, scenario.expectedIds) {
-				t.Errorf("(%d) Couldn't find %s in %v", i, r.Id, scenario.expectedIds)
-			}
+		if !scenario.expectError && record.Email() != scenario.expectedEmail {
+			t.Errorf("(%d) Expected record model %s, got %s", i, scenario.expectedEmail, record.Email())
+		}
+	}
+}
+
+func TestFindAuthRecordByEmail(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	scenarios := []struct {
+		collectionIdOrName string
+		email              string
+		expectError        bool
+	}{
+		{"missing", "test@example.com", true},
+		{"demo2", "test@example.com", true},
+		{"users", "missing@example.com", true},
+		{"users", "test@example.com", false},
+		{"clients", "test2@example.com", false},
+	}
+
+	for i, scenario := range scenarios {
+		record, err := app.Dao().FindAuthRecordByEmail(scenario.collectionIdOrName, scenario.email)
+
+		hasErr := err != nil
+		if hasErr != scenario.expectError {
+			t.Errorf("(%d) Expected hasErr to be %v, got %v (%v)", i, scenario.expectError, hasErr, err)
+			continue
+		}
+
+		if !scenario.expectError && record.Email() != scenario.email {
+			t.Errorf("(%d) Expected record with email %s, got %s", i, scenario.email, record.Email())
+		}
+	}
+}
+
+func TestFindAuthRecordByUsername(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	scenarios := []struct {
+		collectionIdOrName string
+		username           string
+		expectError        bool
+	}{
+		{"missing", "test_username", true},
+		{"demo2", "test_username", true},
+		{"users", "missing", true},
+		{"users", "test2_username", false},
+		{"users", "TEST2_USERNAME", false}, // case insensitive check
+		{"clients", "clients43362", false},
+	}
+
+	for i, scenario := range scenarios {
+		record, err := app.Dao().FindAuthRecordByUsername(scenario.collectionIdOrName, scenario.username)
+
+		hasErr := err != nil
+		if hasErr != scenario.expectError {
+			t.Errorf("(%d) Expected hasErr to be %v, got %v (%v)", i, scenario.expectError, hasErr, err)
+			continue
+		}
+
+		if !scenario.expectError && !strings.EqualFold(record.Username(), scenario.username) {
+			t.Errorf("(%d) Expected record with username %s, got %s", i, scenario.username, record.Username())
+		}
+	}
+}
+
+func TestSuggestUniqueAuthRecordUsername(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	scenarios := []struct {
+		collectionIdOrName string
+		baseUsername       string
+		expectedPattern    string
+	}{
+		// missing collection
+		{"missing", "test2_username", `^test2_username\d{12}$`},
+		// not an auth collection
+		{"demo2", "test2_username", `^test2_username\d{12}$`},
+		// auth collection with unique base username
+		{"users", "new_username", `^new_username$`},
+		{"users", "NEW_USERNAME", `^NEW_USERNAME$`},
+		// auth collection with existing username
+		{"users", "test2_username", `^test2_username\d{3}$`},
+		{"users", "TEST2_USERNAME", `^TEST2_USERNAME\d{3}$`},
+	}
+
+	for i, scenario := range scenarios {
+		username := app.Dao().SuggestUniqueAuthRecordUsername(
+			scenario.collectionIdOrName,
+			scenario.baseUsername,
+		)
+
+		pattern, err := regexp.Compile(scenario.expectedPattern)
+		if err != nil {
+			t.Errorf("[%d] Invalid username pattern %q: %v", i, scenario.expectedPattern, err)
+		}
+		if !pattern.MatchString(username) {
+			t.Fatalf("Expected username to match %s, got username %s", scenario.expectedPattern, username)
 		}
 	}
 }
@@ -314,32 +535,64 @@ func TestSaveRecord(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	collection, _ := app.Dao().FindCollectionByNameOrId("demo")
+	collection, _ := app.Dao().FindCollectionByNameOrId("demo2")
 
 	// create
 	// ---
 	r1 := models.NewRecord(collection)
-	r1.SetDataValue("title", "test_new")
+	r1.Set("title", "test_new")
 	err1 := app.Dao().SaveRecord(r1)
 	if err1 != nil {
 		t.Fatal(err1)
 	}
-	newR1, _ := app.Dao().FindFirstRecordByData(collection, "title", "test_new")
-	if newR1 == nil || newR1.Id != r1.Id || newR1.GetStringDataValue("title") != r1.GetStringDataValue("title") {
-		t.Errorf("Expected to find record %v, got %v", r1, newR1)
+	newR1, _ := app.Dao().FindFirstRecordByData(collection.Id, "title", "test_new")
+	if newR1 == nil || newR1.Id != r1.Id || newR1.GetString("title") != r1.GetString("title") {
+		t.Fatalf("Expected to find record %v, got %v", r1, newR1)
 	}
 
 	// update
 	// ---
-	r2, _ := app.Dao().FindFirstRecordByData(collection, "id", "b5c2ffc2-bafd-48f7-b8b7-090638afe209")
-	r2.SetDataValue("title", "test_update")
+	r2, _ := app.Dao().FindFirstRecordByData(collection.Id, "id", "0yxhwia2amd8gec")
+	r2.Set("title", "test_update")
 	err2 := app.Dao().SaveRecord(r2)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
-	newR2, _ := app.Dao().FindFirstRecordByData(collection, "title", "test_update")
-	if newR2 == nil || newR2.Id != r2.Id || newR2.GetStringDataValue("title") != r2.GetStringDataValue("title") {
-		t.Errorf("Expected to find record %v, got %v", r2, newR2)
+	newR2, _ := app.Dao().FindFirstRecordByData(collection.Id, "title", "test_update")
+	if newR2 == nil || newR2.Id != r2.Id || newR2.GetString("title") != r2.GetString("title") {
+		t.Fatalf("Expected to find record %v, got %v", r2, newR2)
+	}
+}
+
+func TestSaveRecordWithIdFromOtherCollection(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	baseCollection, _ := app.Dao().FindCollectionByNameOrId("demo2")
+	authCollection, _ := app.Dao().FindCollectionByNameOrId("nologin")
+
+	// base collection test
+	r1 := models.NewRecord(baseCollection)
+	r1.Set("title", "test_new")
+	r1.Set("id", "mk5fmymtx4wsprk") // existing id of demo3 record
+	r1.MarkAsNew()
+	if err := app.Dao().SaveRecord(r1); err != nil {
+		t.Fatalf("Expected nil, got error %v", err)
+	}
+
+	// auth collection test
+	r2 := models.NewRecord(authCollection)
+	r2.Set("username", "test_new")
+	r2.Set("id", "gk390qegs4y47wn") // existing id of "clients" record
+	r2.MarkAsNew()
+	if err := app.Dao().SaveRecord(r2); err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+
+	// try again with unique id
+	r2.Set("id", "unique_id")
+	if err := app.Dao().SaveRecord(r2); err != nil {
+		t.Fatalf("Expected nil, got error %v", err)
 	}
 }
 
@@ -347,130 +600,198 @@ func TestDeleteRecord(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	demo, _ := app.Dao().FindCollectionByNameOrId("demo")
-	demo2, _ := app.Dao().FindCollectionByNameOrId("demo2")
+	demoCollection, _ := app.Dao().FindCollectionByNameOrId("demo2")
 
 	// delete unsaved record
 	// ---
-	rec1 := models.NewRecord(demo)
-	err1 := app.Dao().DeleteRecord(rec1)
-	if err1 == nil {
-		t.Fatal("(rec1) Didn't expect to succeed deleting new record")
+	rec0 := models.NewRecord(demoCollection)
+	if err := app.Dao().DeleteRecord(rec0); err == nil {
+		t.Fatal("(rec0) Didn't expect to succeed deleting unsaved record")
+	}
+
+	// delete existing record + external auths
+	// ---
+	rec1, _ := app.Dao().FindRecordById("users", "4q1xlclmfloku33")
+	if err := app.Dao().DeleteRecord(rec1); err != nil {
+		t.Fatalf("(rec1) Expected nil, got error %v", err)
+	}
+	// check if it was really deleted
+	if refreshed, _ := app.Dao().FindRecordById(rec1.Collection().Id, rec1.Id); refreshed != nil {
+		t.Fatalf("(rec1) Expected record to be deleted, got %v", refreshed)
+	}
+	// check if the external auths were deleted
+	if auths, _ := app.Dao().FindAllExternalAuthsByRecord(rec1); len(auths) > 0 {
+		t.Fatalf("(rec1) Expected external auths to be deleted, got %v", auths)
 	}
 
 	// delete existing record while being part of a non-cascade required relation
 	// ---
-	rec2, _ := app.Dao().FindFirstRecordByData(demo, "id", "848a1dea-5ddd-42d6-a00d-030547bffcfe")
-	err2 := app.Dao().DeleteRecord(rec2)
-	if err2 == nil {
+	rec2, _ := app.Dao().FindRecordById("demo3", "7nwo8tuiatetxdm")
+	if err := app.Dao().DeleteRecord(rec2); err == nil {
 		t.Fatalf("(rec2) Expected error, got nil")
 	}
 
-	// delete existing record
+	// delete existing record + cascade
 	// ---
-	rec3, _ := app.Dao().FindFirstRecordByData(demo, "id", "577bd676-aacb-4072-b7da-99d00ee210a4")
-	err3 := app.Dao().DeleteRecord(rec3)
-	if err3 != nil {
-		t.Fatalf("(rec3) Expected nil, got error %v", err3)
+	calledQueries := []string{}
+	app.Dao().NonconcurrentDB().(*dbx.DB).QueryLogFunc = func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
+		calledQueries = append(calledQueries, sql)
 	}
-
+	app.Dao().ConcurrentDB().(*dbx.DB).QueryLogFunc = func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
+		calledQueries = append(calledQueries, sql)
+	}
+	app.Dao().NonconcurrentDB().(*dbx.DB).ExecLogFunc = func(ctx context.Context, t time.Duration, sql string, result sql.Result, err error) {
+		calledQueries = append(calledQueries, sql)
+	}
+	app.Dao().ConcurrentDB().(*dbx.DB).ExecLogFunc = func(ctx context.Context, t time.Duration, sql string, result sql.Result, err error) {
+		calledQueries = append(calledQueries, sql)
+	}
+	rec3, _ := app.Dao().FindRecordById("users", "oap640cot4yru2s")
+	// delete
+	if err := app.Dao().DeleteRecord(rec3); err != nil {
+		t.Fatalf("(rec3) Expected nil, got error %v", err)
+	}
 	// check if it was really deleted
-	rec3, _ = app.Dao().FindRecordById(demo, rec3.Id, nil)
+	rec3, _ = app.Dao().FindRecordById(rec3.Collection().Id, rec3.Id)
 	if rec3 != nil {
 		t.Fatalf("(rec3) Expected record to be deleted, got %v", rec3)
 	}
-
 	// check if the operation cascaded
-	rel, _ := app.Dao().FindFirstRecordByData(demo2, "id", "63c2ab80-84ab-4057-a592-4604a731f78f")
+	rel, _ := app.Dao().FindRecordById("demo1", "84nmscqy84lsi1t")
 	if rel != nil {
 		t.Fatalf("(rec3) Expected the delete to cascade, found relation %v", rel)
 	}
+	// ensure that the json rel fields were prefixed
+	joinedQueries := strings.Join(calledQueries, " ")
+	expectedRelManyJoin := "`demo1` LEFT JOIN json_each(CASE WHEN json_valid([[demo1.rel_many]]) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END)"
+	if !strings.Contains(joinedQueries, expectedRelManyJoin) {
+		t.Fatalf("(rec3) Expected the cascade delete to call the query \n%v, got \n%v", expectedRelManyJoin, calledQueries)
+	}
+	expectedRelOneJoin := "`demo1` LEFT JOIN json_each(CASE WHEN json_valid([[demo1.rel_one]]) THEN [[demo1.rel_one]] ELSE json_array([[demo1.rel_one]]) END)"
+	if !strings.Contains(joinedQueries, expectedRelOneJoin) {
+		t.Fatalf("(rec3) Expected the cascade delete to call the query \n%v, got \n%v", expectedRelOneJoin, calledQueries)
+	}
 }
 
-func TestSyncRecordTableSchema(t *testing.T) {
+func TestDeleteRecordBatchProcessing(t *testing.T) {
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
-	oldCollection, err := app.Dao().FindCollectionByNameOrId("demo")
-	if err != nil {
+	if err := createMockBatchProcessingData(app.Dao()); err != nil {
 		t.Fatal(err)
 	}
-	updatedCollection, err := app.Dao().FindCollectionByNameOrId("demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	updatedCollection.Name = "demo_renamed"
-	updatedCollection.Schema.RemoveField(updatedCollection.Schema.GetFieldByName("file").Id)
-	updatedCollection.Schema.AddField(
-		&schema.SchemaField{
-			Name: "new_field",
-			Type: schema.FieldTypeEmail,
-		},
-	)
-	updatedCollection.Schema.AddField(
-		&schema.SchemaField{
-			Id:   updatedCollection.Schema.GetFieldByName("title").Id,
-			Name: "title_renamed",
-			Type: schema.FieldTypeEmail,
-		},
-	)
 
-	scenarios := []struct {
-		newCollection     *models.Collection
-		oldCollection     *models.Collection
-		expectedTableName string
-		expectedColumns   []string
-	}{
-		{
-			&models.Collection{
-				Name: "new_table",
-				Schema: schema.NewSchema(
-					&schema.SchemaField{
-						Name: "test",
-						Type: schema.FieldTypeText,
-					},
-				),
+	// find and delete the first c1 record to trigger cascade
+	mainRecord, _ := app.Dao().FindRecordById("c1", "a")
+	if err := app.Dao().DeleteRecord(mainRecord); err != nil {
+		t.Fatal(err)
+	}
+
+	// check if the main record was deleted
+	_, err := app.Dao().FindRecordById(mainRecord.Collection().Id, mainRecord.Id)
+	if err == nil {
+		t.Fatal("The main record wasn't deleted")
+	}
+
+	// check if the c2 rel fields were updated
+	c2Records, err := app.Dao().FindRecordsByExpr("c2", nil)
+	if err != nil || len(c2Records) == 0 {
+		t.Fatalf("Failed to fetch c2 records: %v", err)
+	}
+	for _, r := range c2Records {
+		ids := r.GetStringSlice("rel")
+		if len(ids) != 1 || ids[0] != "b" {
+			t.Fatalf("Expected only 'b' rel id, got %v", ids)
+		}
+	}
+
+	// check if all c3 relations were deleted
+	c3Records, err := app.Dao().FindRecordsByExpr("c3", nil)
+	if err != nil {
+		t.Fatalf("Failed to fetch c3 records: %v", err)
+	}
+	if total := len(c3Records); total != 0 {
+		t.Fatalf("Expected c3 records to be deleted, found %d", total)
+	}
+}
+
+func createMockBatchProcessingData(dao *daos.Dao) error {
+	// create mock collection without relation
+	c1 := &models.Collection{}
+	c1.Id = "c1"
+	c1.Name = c1.Id
+	c1.Schema = schema.NewSchema(
+		&schema.SchemaField{
+			Name: "text",
+			Type: schema.FieldTypeText,
+		},
+	)
+	if err := dao.SaveCollection(c1); err != nil {
+		return err
+	}
+
+	// create mock collection with a multi-rel field
+	c2 := &models.Collection{}
+	c2.Id = "c2"
+	c2.Name = c2.Id
+	c2.Schema = schema.NewSchema(
+		&schema.SchemaField{
+			Name: "rel",
+			Type: schema.FieldTypeRelation,
+			Options: &schema.RelationOptions{
+				MaxSelect:     types.Pointer(10),
+				CollectionId:  "c1",
+				CascadeDelete: false, // should unset all rel fields
 			},
-			nil,
-			"new_table",
-			[]string{"id", "created", "updated", "test"},
 		},
-		// no changes
-		{
-			oldCollection,
-			oldCollection,
-			"demo",
-			[]string{"id", "created", "updated", "title", "file"},
-		},
-		// renamed table, deleted column, renamed columnd and new column
-		{
-			updatedCollection,
-			oldCollection,
-			"demo_renamed",
-			[]string{"id", "created", "updated", "title_renamed", "new_field"},
-		},
+	)
+	if err := dao.SaveCollection(c2); err != nil {
+		return err
 	}
 
-	for i, scenario := range scenarios {
-		err := app.Dao().SyncRecordTableSchema(scenario.newCollection, scenario.oldCollection)
-		if err != nil {
-			t.Errorf("(%d) %v", i, err)
-			continue
+	// create mock collection with a single-rel field
+	c3 := &models.Collection{}
+	c3.Id = "c3"
+	c3.Name = c3.Id
+	c3.Schema = schema.NewSchema(
+		&schema.SchemaField{
+			Name: "rel",
+			Type: schema.FieldTypeRelation,
+			Options: &schema.RelationOptions{
+				MaxSelect:     types.Pointer(1),
+				CollectionId:  "c1",
+				CascadeDelete: true, // should delete all c3 records
+			},
+		},
+	)
+	if err := dao.SaveCollection(c3); err != nil {
+		return err
+	}
+
+	// insert mock records
+	c1RecordA := models.NewRecord(c1)
+	c1RecordA.Id = "a"
+	if err := dao.Save(c1RecordA); err != nil {
+		return err
+	}
+	c1RecordB := models.NewRecord(c1)
+	c1RecordB.Id = "b"
+	if err := dao.Save(c1RecordB); err != nil {
+		return err
+	}
+	for i := 0; i < 2400; i++ {
+		c2Record := models.NewRecord(c2)
+		c2Record.Set("rel", []string{c1RecordA.Id, c1RecordB.Id})
+		if err := dao.Save(c2Record); err != nil {
+			return err
 		}
 
-		if !app.Dao().HasTable(scenario.newCollection.Name) {
-			t.Errorf("(%d) Expected table %s to exist", i, scenario.newCollection.Name)
-		}
-
-		cols, _ := app.Dao().GetTableColumns(scenario.newCollection.Name)
-		if len(cols) != len(scenario.expectedColumns) {
-			t.Errorf("(%d) Expected columns %v, got %v", i, scenario.expectedColumns, cols)
-		}
-
-		for _, c := range cols {
-			if !list.ExistInSlice(c, scenario.expectedColumns) {
-				t.Errorf("(%d) Couldn't find column %s in %v", i, c, scenario.expectedColumns)
-			}
+		c3Record := models.NewRecord(c3)
+		c3Record.Set("rel", c1RecordA.Id)
+		if err := dao.Save(c3Record); err != nil {
+			return err
 		}
 	}
+
+	return nil
 }

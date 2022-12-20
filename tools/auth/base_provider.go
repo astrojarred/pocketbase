@@ -2,9 +2,8 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"golang.org/x/oauth2"
@@ -107,31 +106,41 @@ func (p *baseProvider) Client(token *oauth2.Token) *http.Client {
 }
 
 // FetchRawUserData implements Provider.FetchRawUserData interface.
-func (p *baseProvider) FetchRawUserData(token *oauth2.Token, result any) error {
+func (p *baseProvider) FetchRawUserData(token *oauth2.Token) ([]byte, error) {
+	req, err := http.NewRequest("GET", p.userApiUrl, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.sendRawUserDataRequest(req, token)
+}
+
+// sendRawUserDataRequest sends the specified user data request and return its raw response body.
+func (p *baseProvider) sendRawUserDataRequest(req *http.Request, token *oauth2.Token) ([]byte, error) {
 	client := p.Client(token)
 
-	response, err := client.Get(p.userApiUrl)
+	response, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer response.Body.Close()
 
-	content, err := ioutil.ReadAll(response.Body)
+	result, err := io.ReadAll(response.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// http.Client.Get doesn't treat non 2xx responses as error
 	if response.StatusCode >= 400 {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"Failed to fetch OAuth2 user profile via %s (%d):\n%s",
 			p.userApiUrl,
 			response.StatusCode,
-			string(content),
+			string(result),
 		)
 	}
 
-	return json.Unmarshal(content, &result)
+	return result, nil
 }
 
 // oauth2Config constructs a oauth2.Config instance based on the provider settings.

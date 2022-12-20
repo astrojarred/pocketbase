@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -116,6 +117,90 @@ func (s *System) Upload(content []byte, fileKey string) error {
 	return w.Close()
 }
 
+// UploadFile uploads the provided multipart file to the fileKey location.
+func (s *System) UploadFile(file *File, fileKey string) error {
+	f, err := file.Reader.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	mt, err := mimetype.DetectReader(f)
+	if err != nil {
+		return err
+	}
+
+	// rewind
+	f.Seek(0, io.SeekStart)
+
+	originalName := file.OriginalName
+	if len(originalName) > 255 {
+		// keep only the first 255 chars as a very rudimentary measure
+		// to prevent the metadata to grow too big in size
+		originalName = originalName[:255]
+	}
+	opts := &blob.WriterOptions{
+		ContentType: mt.String(),
+		Metadata: map[string]string{
+			"original_filename": originalName,
+		},
+	}
+
+	w, err := s.bucket.NewWriter(s.ctx, fileKey, opts)
+	if err != nil {
+		return err
+	}
+
+	if _, err := w.ReadFrom(f); err != nil {
+		w.Close()
+		return err
+	}
+
+	return w.Close()
+}
+
+// UploadMultipart uploads the provided multipart file to the fileKey location.
+func (s *System) UploadMultipart(fh *multipart.FileHeader, fileKey string) error {
+	f, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	mt, err := mimetype.DetectReader(f)
+	if err != nil {
+		return err
+	}
+
+	// rewind
+	f.Seek(0, io.SeekStart)
+
+	originalName := fh.Filename
+	if len(originalName) > 255 {
+		// keep only the first 255 chars as a very rudimentary measure
+		// to prevent the metadata to grow too big in size
+		originalName = originalName[:255]
+	}
+	opts := &blob.WriterOptions{
+		ContentType: mt.String(),
+		Metadata: map[string]string{
+			"original_filename": originalName,
+		},
+	}
+
+	w, err := s.bucket.NewWriter(s.ctx, fileKey, opts)
+	if err != nil {
+		return err
+	}
+
+	if _, err := w.ReadFrom(f); err != nil {
+		w.Close()
+		return err
+	}
+
+	return w.Close()
+}
+
 // Delete deletes stored file at fileKey location.
 func (s *System) Delete(fileKey string) error {
 	return s.bucket.Delete(s.ctx, fileKey)
@@ -133,13 +218,11 @@ func (s *System) DeletePrefix(prefix string) []error {
 	dirsMap := map[string]struct{}{}
 	dirsMap[prefix] = struct{}{}
 
-	opts := blob.ListOptions{
-		Prefix: prefix,
-	}
-
 	// delete all files with the prefix
 	// ---
-	iter := s.bucket.List(&opts)
+	iter := s.bucket.List(&blob.ListOptions{
+		Prefix: prefix,
+	})
 	for {
 		obj, err := iter.Next(s.ctx)
 		if err == io.EOF {
@@ -203,15 +286,15 @@ var manualExtensionContentTypes = map[string]string{
 }
 
 // Serve serves the file at fileKey location to an HTTP response.
-func (s *System) Serve(response http.ResponseWriter, fileKey string, name string) error {
-	r, readErr := s.bucket.NewReader(s.ctx, fileKey, nil)
+func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey string, name string) error {
+	br, readErr := s.bucket.NewReader(s.ctx, fileKey, nil)
 	if readErr != nil {
 		return readErr
 	}
-	defer r.Close()
+	defer br.Close()
 
 	disposition := "attachment"
-	realContentType := r.ContentType()
+	realContentType := br.ContentType()
 	if list.ExistInSlice(realContentType, inlineServeContentTypes) {
 		disposition = "inline"
 	}
@@ -226,26 +309,32 @@ func (s *System) Serve(response http.ResponseWriter, fileKey string, name string
 	// clickjacking shouldn't be a concern when serving uploaded files,
 	// so it safe to unset the global X-Frame-Options to allow files embedding
 	// (see https://github.com/pocketbase/pocketbase/issues/677)
-	response.Header().Del("X-Frame-Options")
+	res.Header().Del("X-Frame-Options")
 
-	response.Header().Set("Content-Disposition", disposition+"; filename="+name)
-	response.Header().Set("Content-Type", extContentType)
-	response.Header().Set("Content-Length", strconv.FormatInt(r.Size(), 10))
-	response.Header().Set("Content-Security-Policy", "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
+	res.Header().Set("Content-Disposition", disposition+"; filename="+name)
+	res.Header().Set("Content-Type", extContentType)
+	res.Header().Set("Content-Length", strconv.FormatInt(br.Size(), 10))
+	res.Header().Set("Content-Security-Policy", "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
 
-	// All HTTP date/time stamps MUST be represented in Greenwich Mean Time (GMT)
+	// all HTTP date/time stamps MUST be represented in Greenwich Mean Time (GMT)
 	// (see https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1)
 	//
 	// NB! time.LoadLocation may fail on non-Unix systems (see https://github.com/pocketbase/pocketbase/issues/45)
 	location, locationErr := time.LoadLocation("GMT")
 	if locationErr == nil {
-		response.Header().Set("Last-Modified", r.ModTime().In(location).Format("Mon, 02 Jan 06 15:04:05 MST"))
+		res.Header().Set("Last-Modified", br.ModTime().In(location).Format("Mon, 02 Jan 06 15:04:05 MST"))
 	}
 
-	// copy from the read range to response.
-	_, err := io.Copy(response, r)
+	// set a default cache-control header
+	// (valid for 30 days but the cache is allowed to reuse the file for any requests
+	// that are made in the last day while revalidating the res in the background)
+	if res.Header().Get("Cache-Control") == "" {
+		res.Header().Set("Cache-Control", "max-age=2592000, stale-while-revalidate=86400")
+	}
 
-	return err
+	http.ServeContent(res, req, name, br.ModTime(), br)
+
+	return nil
 }
 
 var ThumbSizeRegex = regexp.MustCompile(`^(\d+)x(\d+)(t|b|f)?$`)
@@ -282,6 +371,7 @@ func (s *System) CreateThumb(originalKey string, thumbKey, thumbSize string) err
 	defer r.Close()
 
 	// create imaging object from the original reader
+	// (note: only the first frame for animated image formats)
 	img, decodeErr := imaging.Decode(r, imaging.AutoOrientation(true))
 	if decodeErr != nil {
 		return decodeErr

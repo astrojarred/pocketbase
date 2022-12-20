@@ -2,10 +2,11 @@ package auth
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"strconv"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/github"
 )
 
 var _ Provider = (*Github)(nil)
@@ -22,33 +23,45 @@ type Github struct {
 func NewGithubProvider() *Github {
 	return &Github{&baseProvider{
 		scopes:     []string{"read:user", "user:email"},
-		authUrl:    "https://github.com/login/oauth/authorize",
-		tokenUrl:   "https://github.com/login/oauth/access_token",
+		authUrl:    github.Endpoint.AuthURL,
+		tokenUrl:   github.Endpoint.TokenURL,
 		userApiUrl: "https://api.github.com/user",
 	}}
 }
 
 // FetchAuthUser returns an AuthUser instance based the Github's user api.
+//
+// API reference: https://docs.github.com/en/rest/reference/users#get-the-authenticated-user
 func (p *Github) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
-	// https://docs.github.com/en/rest/reference/users#get-the-authenticated-user
-	rawData := struct {
+	data, err := p.FetchRawUserData(token)
+	if err != nil {
+		return nil, err
+	}
+
+	rawUser := map[string]any{}
+	if err := json.Unmarshal(data, &rawUser); err != nil {
+		return nil, err
+	}
+
+	extracted := struct {
 		Login     string `json:"login"`
 		Id        int    `json:"id"`
 		Name      string `json:"name"`
 		Email     string `json:"email"`
 		AvatarUrl string `json:"avatar_url"`
 	}{}
-
-	if err := p.FetchRawUserData(token, &rawData); err != nil {
+	if err := json.Unmarshal(data, &extracted); err != nil {
 		return nil, err
 	}
 
 	user := &AuthUser{
-		Id:        strconv.Itoa(rawData.Id),
-		Name:      rawData.Name,
-		Username:  rawData.Login,
-		Email:     rawData.Email,
-		AvatarUrl: rawData.AvatarUrl,
+		Id:          strconv.Itoa(extracted.Id),
+		Name:        extracted.Name,
+		Username:    extracted.Login,
+		Email:       extracted.Email,
+		AvatarUrl:   extracted.AvatarUrl,
+		RawUser:     rawUser,
+		AccessToken: token.AccessToken,
 	}
 
 	// in case user set "Keep my email address private",
@@ -62,7 +75,7 @@ func (p *Github) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 		}
 		defer response.Body.Close()
 
-		content, err := ioutil.ReadAll(response.Body)
+		content, err := io.ReadAll(response.Body)
 		if err != nil {
 			return user, err
 		}

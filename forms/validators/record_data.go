@@ -12,8 +12,8 @@ import (
 	"github.com/pocketbase/pocketbase/daos"
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/models/schema"
+	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"github.com/pocketbase/pocketbase/tools/list"
-	"github.com/pocketbase/pocketbase/tools/rest"
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
@@ -28,7 +28,7 @@ var requiredErr = validation.NewError("validation_required", "Missing required v
 func NewRecordDataValidator(
 	dao *daos.Dao,
 	record *models.Record,
-	uploadedFiles []*rest.UploadedFile,
+	uploadedFiles map[string][]*filesystem.File,
 ) *RecordDataValidator {
 	return &RecordDataValidator{
 		dao:           dao,
@@ -42,7 +42,7 @@ func NewRecordDataValidator(
 type RecordDataValidator struct {
 	dao           *daos.Dao
 	record        *models.Record
-	uploadedFiles []*rest.UploadedFile
+	uploadedFiles map[string][]*filesystem.File
 }
 
 // Validate validates the provided `data` by checking it against
@@ -88,7 +88,7 @@ func (validator *RecordDataValidator) Validate(data map[string]any) error {
 
 		// check unique constraint
 		if field.Unique && !validator.dao.IsRecordValueUnique(
-			validator.record.Collection(),
+			validator.record.Collection().Id,
 			key,
 			value,
 			validator.record.GetId(),
@@ -127,8 +127,6 @@ func (validator *RecordDataValidator) checkFieldValue(field *schema.SchemaField,
 		return validator.checkFileValue(field, value)
 	case schema.FieldTypeRelation:
 		return validator.checkRelationValue(field, value)
-	case schema.FieldTypeUser:
-		return validator.checkUserValue(field, value)
 	}
 
 	return nil
@@ -137,7 +135,7 @@ func (validator *RecordDataValidator) checkFieldValue(field *schema.SchemaField,
 func (validator *RecordDataValidator) checkTextValue(field *schema.SchemaField, value any) error {
 	val, _ := value.(string)
 	if val == "" {
-		return nil // nothing to check
+		return nil // nothing to check (skip zero-defaults)
 	}
 
 	options, _ := field.Options.(*schema.TextOptions)
@@ -161,11 +159,11 @@ func (validator *RecordDataValidator) checkTextValue(field *schema.SchemaField, 
 }
 
 func (validator *RecordDataValidator) checkNumberValue(field *schema.SchemaField, value any) error {
-	if value == nil {
-		return nil // nothing to check
+	val, _ := value.(float64)
+	if val == 0 {
+		return nil // nothing to check (skip zero-defaults)
 	}
 
-	val, _ := value.(float64)
 	options, _ := field.Options.(*schema.NumberOptions)
 
 	if options.Min != nil && val < *options.Min {
@@ -316,9 +314,9 @@ func (validator *RecordDataValidator) checkFileValue(field *schema.SchemaField, 
 	}
 
 	// extract the uploaded files
-	files := make([]*rest.UploadedFile, 0, len(validator.uploadedFiles))
-	for _, file := range validator.uploadedFiles {
-		if list.ExistInSlice(file.Name(), names) {
+	files := make([]*filesystem.File, 0, len(validator.uploadedFiles[field.Name]))
+	for _, file := range validator.uploadedFiles[field.Name] {
+		if list.ExistInSlice(file.Name, names) {
 			files = append(files, file)
 		}
 	}
@@ -351,8 +349,8 @@ func (validator *RecordDataValidator) checkRelationValue(field *schema.SchemaFie
 
 	options, _ := field.Options.(*schema.RelationOptions)
 
-	if len(ids) > options.MaxSelect {
-		return validation.NewError("validation_too_many_values", fmt.Sprintf("Select no more than %d", options.MaxSelect))
+	if options.MaxSelect != nil && len(ids) > *options.MaxSelect {
+		return validation.NewError("validation_too_many_values", fmt.Sprintf("Select no more than %d", *options.MaxSelect))
 	}
 
 	// check if the related records exist
@@ -371,34 +369,6 @@ func (validator *RecordDataValidator) checkRelationValue(field *schema.SchemaFie
 		return validation.NewError("validation_missing_rel_records", "Failed to fetch all relation records with the provided ids")
 	}
 	// ---
-
-	return nil
-}
-
-func (validator *RecordDataValidator) checkUserValue(field *schema.SchemaField, value any) error {
-	ids := list.ToUniqueStringSlice(value)
-	if len(ids) == 0 {
-		if field.Required {
-			return requiredErr
-		}
-		return nil // nothing to check
-	}
-
-	options, _ := field.Options.(*schema.UserOptions)
-
-	if len(ids) > options.MaxSelect {
-		return validation.NewError("validation_too_many_values", fmt.Sprintf("Select no more than %d", options.MaxSelect))
-	}
-
-	// check if the related users exist
-	var total int
-	validator.dao.UserQuery().
-		Select("count(*)").
-		AndWhere(dbx.In("id", list.ToInterfaceSlice(ids)...)).
-		Row(&total)
-	if total != len(ids) {
-		return validation.NewError("validation_missing_users", "Failed to fetch all users with the provided ids")
-	}
 
 	return nil
 }

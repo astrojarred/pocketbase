@@ -60,15 +60,6 @@ func TestProviderPerPage(t *testing.T) {
 	}
 }
 
-func TestProviderCountColumn(t *testing.T) {
-	r := &testFieldResolver{}
-	p := NewProvider(r).CountColumn("test")
-
-	if p.countColumn != "test" {
-		t.Fatalf("Expected distinct count column %v, got %v", "test", p.countColumn)
-	}
-}
-
 func TestProviderSort(t *testing.T) {
 	initialSort := []SortField{{"test1", SortAsc}, {"test2", SortAsc}}
 	r := &testFieldResolver{}
@@ -219,124 +210,103 @@ func TestProviderExecNonEmptyQuery(t *testing.T) {
 		OrderBy("test1 ASC")
 
 	scenarios := []struct {
+		name          string
 		page          int
 		perPage       int
 		sort          []SortField
 		filter        []FilterData
-		countColumn   string
 		expectError   bool
 		expectResult  string
 		expectQueries []string
 	}{
-		// page normalization
 		{
+			"page normalization",
 			-1,
 			10,
 			[]SortField{},
 			[]FilterData{},
-			"",
 			false,
 			`{"page":1,"perPage":10,"totalItems":2,"totalPages":1,"items":[{"test1":1,"test2":"test2.1","test3":""},{"test1":2,"test2":"test2.2","test3":""}]}`,
 			[]string{
-				"SELECT COUNT(*) FROM `test` WHERE NOT (`test1` IS NULL)",
+				"SELECT COUNT(*) FROM (SELECT `test`.`id` FROM `test` WHERE NOT (`test1` IS NULL))",
 				"SELECT * FROM `test` WHERE NOT (`test1` IS NULL) ORDER BY `test1` ASC LIMIT 10",
 			},
 		},
-		// perPage normalization
 		{
+			"perPage normalization",
 			10, // will be capped by total count
 			0,  // fallback to default
 			[]SortField{},
 			[]FilterData{},
-			"",
 			false,
 			`{"page":1,"perPage":30,"totalItems":2,"totalPages":1,"items":[{"test1":1,"test2":"test2.1","test3":""},{"test1":2,"test2":"test2.2","test3":""}]}`,
 			[]string{
-				"SELECT COUNT(*) FROM `test` WHERE NOT (`test1` IS NULL)",
+				"SELECT COUNT(*) FROM (SELECT `test`.`id` FROM `test` WHERE NOT (`test1` IS NULL))",
 				"SELECT * FROM `test` WHERE NOT (`test1` IS NULL) ORDER BY `test1` ASC LIMIT 30",
 			},
 		},
-		// invalid sort field
 		{
+			"invalid sort field",
 			1,
 			10,
 			[]SortField{{"unknown", SortAsc}},
 			[]FilterData{},
-			"",
 			true,
 			"",
 			nil,
 		},
-		// invalid filter
 		{
+			"invalid filter",
 			1,
 			10,
 			[]SortField{},
 			[]FilterData{"test2 = 'test2.1'", "invalid"},
-			"",
 			true,
 			"",
 			nil,
 		},
-		// valid sort and filter fields
 		{
+			"valid sort and filter fields",
 			1,
 			5555, // will be limited by MaxPerPage
 			[]SortField{{"test2", SortDesc}},
 			[]FilterData{"test2 != null", "test1 >= 2"},
-			"",
 			false,
 			`{"page":1,"perPage":` + fmt.Sprint(MaxPerPage) + `,"totalItems":1,"totalPages":1,"items":[{"test1":2,"test2":"test2.2","test3":""}]}`,
 			[]string{
-				"SELECT COUNT(*) FROM `test` WHERE ((NOT (`test1` IS NULL)) AND (COALESCE(test2, '') != COALESCE(null, ''))) AND (test1 >= 2)",
-				"SELECT * FROM `test` WHERE ((NOT (`test1` IS NULL)) AND (COALESCE(test2, '') != COALESCE(null, ''))) AND (test1 >= 2) ORDER BY `test1` ASC, `test2` DESC LIMIT 400",
+				"SELECT COUNT(*) FROM (SELECT `test`.`id` FROM `test` WHERE ((NOT (`test1` IS NULL)) AND (COALESCE(test2, '') != COALESCE(null, ''))) AND (test1 >= 2))",
+				"SELECT * FROM `test` WHERE ((NOT (`test1` IS NULL)) AND (COALESCE(test2, '') != COALESCE(null, ''))) AND (test1 >= 2) ORDER BY `test1` ASC, `test2` DESC LIMIT 500",
 			},
 		},
-		// valid sort and filter fields (zero results)
 		{
+			"valid sort and filter fields (zero results)",
 			1,
 			10,
 			[]SortField{{"test3", SortAsc}},
 			[]FilterData{"test3 != ''"},
-			"",
 			false,
 			`{"page":1,"perPage":10,"totalItems":0,"totalPages":0,"items":[]}`,
 			[]string{
-				"SELECT COUNT(*) FROM `test` WHERE (NOT (`test1` IS NULL)) AND (COALESCE(test3, '') != COALESCE('', ''))",
+				"SELECT COUNT(*) FROM (SELECT `test`.`id` FROM `test` WHERE (NOT (`test1` IS NULL)) AND (COALESCE(test3, '') != COALESCE('', '')))",
 				"SELECT * FROM `test` WHERE (NOT (`test1` IS NULL)) AND (COALESCE(test3, '') != COALESCE('', '')) ORDER BY `test1` ASC, `test3` ASC LIMIT 10",
 			},
 		},
-		// pagination test
 		{
+			"pagination test",
 			3,
 			1,
 			[]SortField{},
 			[]FilterData{},
-			"",
 			false,
 			`{"page":2,"perPage":1,"totalItems":2,"totalPages":2,"items":[{"test1":2,"test2":"test2.2","test3":""}]}`,
 			[]string{
-				"SELECT COUNT(*) FROM `test` WHERE NOT (`test1` IS NULL)",
-				"SELECT * FROM `test` WHERE NOT (`test1` IS NULL) ORDER BY `test1` ASC LIMIT 1 OFFSET 1",
-			},
-		},
-		// distinct count column
-		{
-			3,
-			1,
-			[]SortField{},
-			[]FilterData{},
-			"test.test1",
-			false,
-			`{"page":2,"perPage":1,"totalItems":2,"totalPages":2,"items":[{"test1":2,"test2":"test2.2","test3":""}]}`,
-			[]string{
-				"SELECT COUNT(DISTINCT(test.test1)) FROM `test` WHERE NOT (`test1` IS NULL)",
+				"SELECT COUNT(*) FROM (SELECT `test`.`id` FROM `test` WHERE NOT (`test1` IS NULL))",
 				"SELECT * FROM `test` WHERE NOT (`test1` IS NULL) ORDER BY `test1` ASC LIMIT 1 OFFSET 1",
 			},
 		},
 	}
 
-	for i, s := range scenarios {
+	for _, s := range scenarios {
 		testDB.CalledQueries = []string{} // reset
 
 		testResolver := &testFieldResolver{}
@@ -345,14 +315,13 @@ func TestProviderExecNonEmptyQuery(t *testing.T) {
 			Page(s.page).
 			PerPage(s.perPage).
 			Sort(s.sort).
-			Filter(s.filter).
-			CountColumn(s.countColumn)
+			Filter(s.filter)
 
 		result, err := p.Exec(&[]testTableStruct{})
 
 		hasErr := err != nil
 		if hasErr != s.expectError {
-			t.Errorf("(%d) Expected hasErr %v, got %v (%v)", i, s.expectError, hasErr, err)
+			t.Errorf("[%s] Expected hasErr %v, got %v (%v)", s.name, s.expectError, hasErr, err)
 			continue
 		}
 
@@ -361,22 +330,22 @@ func TestProviderExecNonEmptyQuery(t *testing.T) {
 		}
 
 		if testResolver.UpdateQueryCalls != 1 {
-			t.Errorf("(%d) Expected resolver.Update to be called %d, got %d", i, 1, testResolver.UpdateQueryCalls)
+			t.Errorf("[%s] Expected resolver.Update to be called %d, got %d", s.name, 1, testResolver.UpdateQueryCalls)
 		}
 
 		encoded, _ := json.Marshal(result)
 		if string(encoded) != s.expectResult {
-			t.Errorf("(%d) Expected result %v, got \n%v", i, s.expectResult, string(encoded))
+			t.Errorf("[%s] Expected result %v, got \n%v", s.name, s.expectResult, string(encoded))
 		}
 
 		if len(s.expectQueries) != len(testDB.CalledQueries) {
-			t.Errorf("(%d) Expected %d queries, got %d: \n%v", i, len(s.expectQueries), len(testDB.CalledQueries), testDB.CalledQueries)
+			t.Errorf("[%s] Expected %d queries, got %d: \n%v", s.name, len(s.expectQueries), len(testDB.CalledQueries), testDB.CalledQueries)
 			continue
 		}
 
 		for _, q := range testDB.CalledQueries {
 			if !list.ExistInSliceWithRegex(q, s.expectQueries) {
-				t.Errorf("(%d) Didn't expect query \n%v", i, q)
+				t.Errorf("[%s] Didn't expect query \n%v in \n%v", s.name, q, testDB.CalledQueries)
 			}
 		}
 	}
@@ -439,7 +408,7 @@ func TestProviderParseAndExec(t *testing.T) {
 		{
 			"page=3&perPage=9999&filter=test1>1&sort=-test2,test3",
 			false,
-			`{"page":1,"perPage":400,"totalItems":1,"totalPages":1,"items":[{"test1":2,"test2":"test2.2","test3":""}]}`,
+			`{"page":1,"perPage":500,"totalItems":1,"totalPages":1,"items":[{"test1":2,"test2":"test2.2","test3":""}]}`,
 		},
 	}
 
@@ -504,9 +473,9 @@ func createTestDB() (*testDB, error) {
 	}
 
 	db := testDB{DB: dbx.NewFromDB(sqlDB, "sqlite")}
-	db.CreateTable("test", map[string]string{"test1": "int default 0", "test2": "text default ''", "test3": "text default ''"}).Execute()
-	db.Insert("test", dbx.Params{"test1": 1, "test2": "test2.1"}).Execute()
-	db.Insert("test", dbx.Params{"test1": 2, "test2": "test2.2"}).Execute()
+	db.CreateTable("test", map[string]string{"id": "int default 0", "test1": "int default 0", "test2": "text default ''", "test3": "text default ''"}).Execute()
+	db.Insert("test", dbx.Params{"id": 1, "test1": 1, "test2": "test2.1"}).Execute()
+	db.Insert("test", dbx.Params{"id": 2, "test1": 2, "test2": "test2.2"}).Execute()
 	db.QueryLogFunc = func(ctx context.Context, t time.Duration, sql string, rows *sql.Rows, err error) {
 		db.CalledQueries = append(db.CalledQueries, sql)
 	}

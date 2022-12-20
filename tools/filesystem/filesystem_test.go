@@ -1,11 +1,15 @@
 package filesystem_test
 
 import (
+	"bytes"
 	"image"
 	"image/png"
+	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pocketbase/pocketbase/tools/filesystem"
@@ -128,6 +132,56 @@ func TestFileSystemDeletePrefix(t *testing.T) {
 	}
 }
 
+func TestFileSystemUploadMultipart(t *testing.T) {
+	dir := createTestDir(t)
+	defer os.RemoveAll(dir)
+
+	// create multipart form file
+	body := new(bytes.Buffer)
+	mp := multipart.NewWriter(body)
+	w, err := mp.CreateFormFile("test", "test")
+	if err != nil {
+		t.Fatalf("Failed creating form file: %v", err)
+	}
+	w.Write([]byte("demo"))
+	mp.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req.Header.Add("Content-Type", mp.FormDataContentType())
+
+	file, fh, err := req.FormFile("test")
+	if err != nil {
+		t.Fatalf("Failed to fetch form file: %v", err)
+	}
+	defer file.Close()
+	// ---
+
+	fs, err := filesystem.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	fileKey := "newdir/newkey.txt"
+
+	uploadErr := fs.UploadMultipart(fh, fileKey)
+	if uploadErr != nil {
+		t.Fatal(uploadErr)
+	}
+
+	if exists, _ := fs.Exists(fileKey); !exists {
+		t.Fatalf("Expected newdir/newkey.txt to exist")
+	}
+
+	attrs, err := fs.Attributes(fileKey)
+	if err != nil {
+		t.Fatalf("Failed to fetch file attributes: %v", err)
+	}
+	if name, ok := attrs.Metadata["original_filename"]; !ok || name != "test" {
+		t.Fatalf("Expected original_filename to be %q, got %q", "test", name)
+	}
+}
+
 func TestFileSystemUpload(t *testing.T) {
 	dir := createTestDir(t)
 	defer os.RemoveAll(dir)
@@ -222,9 +276,10 @@ func TestFileSystemServe(t *testing.T) {
 	}
 
 	for _, scenario := range scenarios {
-		r := httptest.NewRecorder()
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/", nil)
 
-		err := fs.Serve(r, scenario.path, scenario.name)
+		err := fs.Serve(res, req, scenario.path, scenario.name)
 		hasErr := err != nil
 
 		if hasErr != scenario.expectError {
@@ -232,7 +287,11 @@ func TestFileSystemServe(t *testing.T) {
 			continue
 		}
 
-		result := r.Result()
+		if scenario.expectError {
+			continue
+		}
+
+		result := res.Result()
 
 		for hName, hValue := range scenario.expectHeaders {
 			v := result.Header.Get(hName)
@@ -244,6 +303,73 @@ func TestFileSystemServe(t *testing.T) {
 		if v := result.Header.Get("X-Frame-Options"); v != "" {
 			t.Errorf("(%s) Expected the X-Frame-Options header to be unset, got %v", scenario.path, v)
 		}
+
+		if v := result.Header.Get("Cache-Control"); v == "" {
+			t.Errorf("(%s) Expected Cache-Control header to be set, got empty string", scenario.path)
+		}
+	}
+}
+
+func TestFileSystemServeSingleRange(t *testing.T) {
+	dir := createTestDir(t)
+	defer os.RemoveAll(dir)
+
+	fs, err := filesystem.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Add("Range", "bytes=0-20")
+
+	if err := fs.Serve(res, req, "image.png", "image.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	result := res.Result()
+
+	if result.StatusCode != http.StatusPartialContent {
+		t.Fatalf("Expected StatusCode %d, got %d", http.StatusPartialContent, result.StatusCode)
+	}
+
+	expectedRange := "bytes 0-20/73"
+	if cr := result.Header.Get("Content-Range"); cr != expectedRange {
+		t.Fatalf("Expected Content-Range %q, got %q", expectedRange, cr)
+	}
+
+	if l := result.Header.Get("Content-Length"); l != "21" {
+		t.Fatalf("Expected Content-Length %v, got %v", 21, l)
+	}
+}
+
+func TestFileSystemServeMultiRange(t *testing.T) {
+	dir := createTestDir(t)
+	defer os.RemoveAll(dir)
+
+	fs, err := filesystem.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Add("Range", "bytes=0-20, 25-30")
+
+	if err := fs.Serve(res, req, "image.png", "image.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	result := res.Result()
+
+	if result.StatusCode != http.StatusPartialContent {
+		t.Fatalf("Expected StatusCode %d, got %d", http.StatusPartialContent, result.StatusCode)
+	}
+
+	if ct := result.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/byteranges; boundary=") {
+		t.Fatalf("Expected Content-Type to be multipart/byteranges, got %v", ct)
 	}
 }
 
@@ -306,42 +432,48 @@ func createTestDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	file1, err := os.OpenFile(filepath.Join(dir, "test/sub1.txt"), os.O_WRONLY|os.O_CREATE, 0666)
+	file1, err := os.OpenFile(filepath.Join(dir, "test/sub1.txt"), os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file1.Close()
 
-	file2, err := os.OpenFile(filepath.Join(dir, "test/sub2.txt"), os.O_WRONLY|os.O_CREATE, 0666)
+	file2, err := os.OpenFile(filepath.Join(dir, "test/sub2.txt"), os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file2.Close()
 
-	file3, err := os.OpenFile(filepath.Join(dir, "image.png"), os.O_WRONLY|os.O_CREATE, 0666)
+	file3, err := os.OpenFile(filepath.Join(dir, "image.png"), os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// tiny 1x1 png
-	imgRect := image.Rect(0, 0, 1, 1)
+	imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 png
 	png.Encode(file3, imgRect)
 	file3.Close()
-	err2 := os.WriteFile(filepath.Join(dir, "image.png.attrs"), []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/png","user.metadata":null}`), 0666)
+	err2 := os.WriteFile(filepath.Join(dir, "image.png.attrs"), []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/png","user.metadata":null}`), 0644)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
 
-	file4, err := os.OpenFile(filepath.Join(dir, "image.svg"), os.O_WRONLY|os.O_CREATE, 0666)
+	file4, err := os.OpenFile(filepath.Join(dir, "image.svg"), os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file4.Close()
 
-	file5, err := os.OpenFile(filepath.Join(dir, "style.css"), os.O_WRONLY|os.O_CREATE, 0666)
+	file5, err := os.OpenFile(filepath.Join(dir, "style.css"), os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file5.Close()
+
+	file6, err := os.OpenFile(filepath.Join(dir, "image_! noext"), os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	png.Encode(file6, image.Rect(0, 0, 1, 1)) // tiny 1x1 png
+	file6.Close()
 
 	return dir
 }

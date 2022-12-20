@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"encoding/json"
+
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/facebook"
 )
 
 var _ Provider = (*Facebook)(nil)
@@ -18,16 +21,27 @@ type Facebook struct {
 func NewFacebookProvider() *Facebook {
 	return &Facebook{&baseProvider{
 		scopes:     []string{"email"},
-		authUrl:    "https://www.facebook.com/dialog/oauth",
-		tokenUrl:   "https://graph.facebook.com/oauth/access_token",
+		authUrl:    facebook.Endpoint.AuthURL,
+		tokenUrl:   facebook.Endpoint.TokenURL,
 		userApiUrl: "https://graph.facebook.com/me?fields=name,email,picture.type(large)",
 	}}
 }
 
 // FetchAuthUser returns an AuthUser instance based on the Facebook's user api.
+//
+// API reference: https://developers.facebook.com/docs/graph-api/reference/user/
 func (p *Facebook) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
-	// https://developers.facebook.com/docs/graph-api/reference/user/
-	rawData := struct {
+	data, err := p.FetchRawUserData(token)
+	if err != nil {
+		return nil, err
+	}
+
+	rawUser := map[string]any{}
+	if err := json.Unmarshal(data, &rawUser); err != nil {
+		return nil, err
+	}
+
+	extracted := struct {
 		Id      string
 		Name    string
 		Email   string
@@ -35,16 +49,17 @@ func (p *Facebook) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 			Data struct{ Url string }
 		}
 	}{}
-
-	if err := p.FetchRawUserData(token, &rawData); err != nil {
+	if err := json.Unmarshal(data, &extracted); err != nil {
 		return nil, err
 	}
 
 	user := &AuthUser{
-		Id:        rawData.Id,
-		Name:      rawData.Name,
-		Email:     rawData.Email,
-		AvatarUrl: rawData.Picture.Data.Url,
+		Id:          extracted.Id,
+		Name:        extracted.Name,
+		Email:       extracted.Email,
+		AvatarUrl:   extracted.Picture.Data.Url,
+		RawUser:     rawUser,
+		AccessToken: token.AccessToken,
 	}
 
 	return user, nil
